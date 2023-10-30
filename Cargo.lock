@@ -96,23 +96,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "concurrency-2pc"
-version = "0.1.0"
-dependencies = [
- "atomic-counter",
- "bincode",
- "clap",
- "ctrlc",
- "ipc-channel",
- "log",
- "rand 0.7.3",
- "serde",
- "serde_json",
- "shellexpand",
- "stderrlog",
-]
-
-[[package]]
 name = "crossbeam-channel"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -649,6 +632,23 @@ checksum = "ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438"
 dependencies = [
  "libc",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "two_phase_commit"
+version = "0.1.0"
+dependencies = [
+ "atomic-counter",
+ "bincode",
+ "clap",
+ "ctrlc",
+ "ipc-channel",
+ "log",
+ "rand 0.7.3",
+ "serde",
+ "serde_json",
+ "shellexpand",
+ "stderrlog",
 ]
 
 [[package]]
