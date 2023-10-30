@@ -6,9 +6,11 @@ extern crate ctrlc;
 extern crate ipc_channel;
 use std::env;
 use std::fs;
+use std::string;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::{Child,Command};
+use client::Client;
 use ipc_channel::ipc::IpcSender as Sender;
 use ipc_channel::ipc::IpcReceiver as Receiver;
 use ipc_channel::ipc::IpcOneShotServer;
@@ -21,6 +23,8 @@ pub mod client;
 pub mod checker;
 pub mod tpcoptions;
 use message::ProtocolMessage;
+
+use crate::participant::Participant;
 
 ///
 /// pub fn spawn_child_and_connect(child_opts: &mut tpcoptions::TPCOptions) -> (std::process::Child, Sender<ProtocolMessage>, Receiver<ProtocolMessage>)
@@ -83,6 +87,36 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let coord_log_path = format!("{}//{}", opts.log_path, "coordinator.log");
 
     // TODO
+    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running);
+    info!("Created IPC {coord_log_path}");
+
+    let mut cCount = 0;
+    let mut optsClient = opts.clone();
+    optsClient.mode = String::from("client");
+    loop {
+        if cCount == opts.num_clients {
+            break;
+        }
+        optsClient.num = cCount;
+        spawn_child_and_connect(&mut optsClient);
+        cCount += 1;
+    }
+    info!("Created {} clients", optsClient.num_clients);
+
+    let mut pCount = 0;
+    let mut optsParticipant = opts.clone();
+    optsParticipant.mode = String::from("participant");
+    loop {
+        if pCount == opts.num_participants {
+            break;
+        }
+        optsParticipant.num = pCount;
+        spawn_child_and_connect(&mut optsParticipant);
+        pCount += 1;
+    }
+    info!("Created {} participants", optsParticipant.num_participants);
+
+    coordinator.protocol();
 }
 
 ///
@@ -97,6 +131,10 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
 ///
 fn run_client(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     // TODO
+    let client_id_str = format!("client_{}", opts.num);
+    let client_log_path = format!("{}//{}", opts.log_path, client_id_str);
+    let mut client = Client::new(client_id_str, running);
+    client.protocol(opts.num_requests);
 }
 
 ///
@@ -114,6 +152,9 @@ fn run_participant(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let participant_log_path = format!("{}//{}.log", opts.log_path, participant_id_str);
 
     // TODO
+    let mut participant = Participant::new(participant_id_str, participant_log_path, running.clone(), opts.send_success_probability, opts.operation_success_probability);
+    println!("Created {} participant", opts.num);
+    participant.protocol();
 }
 
 fn main() {

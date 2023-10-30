@@ -128,6 +128,7 @@ impl Client {
     pub fn protocol(&mut self, n_requests: u32) {
 
         // TODO
+        info!("Sending {} requests", n_requests);
         self.wait_for_exit_signal();
         self.report_status();
     }

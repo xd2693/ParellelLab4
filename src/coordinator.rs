@@ -127,6 +127,11 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
+        loop {
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
+        }
 
         self.report_status();
     }

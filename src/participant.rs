@@ -154,6 +154,11 @@ impl Participant {
         trace!("{}::Waiting for exit signal", self.id_str.clone());
 
         // TODO
+        loop {
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
+        }
 
         trace!("{}::Exiting", self.id_str.clone());
     }
