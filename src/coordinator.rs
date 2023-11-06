@@ -34,7 +34,9 @@ pub enum CoordinatorState {
     ReceivedRequest,
     ProposalSent,
     ReceivedVotesAbort,
-    ReceivedVotesCommit,
+    ReceivedP1VotesCommit,
+    SentP1Commit,
+    ReceivedP2VotesCommit,
     SentGlobalDecision
 }
 
@@ -145,7 +147,9 @@ impl Coordinator {
         //let successful_ops: u64 = 0;
         //let failed_ops: u64 = 0;
         //let unknown_ops: u64 = 0;
-
+        if self.request_status == RequestStatus::Unknown{
+            self.unknown_ops += 1;
+        }
         println!("coordinator     :\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}", self.successful_ops, self.failed_ops, self.unknown_ops);
     }
 
@@ -215,17 +219,126 @@ impl Coordinator {
 
         // TODO
         let timeout_duration = Duration::from_millis(100);
+        let mut client_done = 0;
+        let mut txid = "";
+        let mut uid = 0;
+        let mut sid = "";
+        let mut opid = 0;
+        let mut client_index = 0;
+        let mut result : Result<ProtocolMessage, TryRecvError> ;
+        let mut client_pm : message::ProtocolMessage ;
         
         loop {
             if !self.running.load(Ordering::SeqCst) {
                 break;
             }
-            let mut client_done = 0;
-            let mut txid = "";
-            let mut sid = "";
-            let mut opid = 0;
+            match self.state{
+                CoordinatorState::Quiescent =>{
+                    if client_done == self.vec_client.len(){
+                        break;
+                    }
+                    if self.vec_client_done[client_index]{
+                        client_done += 1;
+                        continue;
+                    }
+                    let client_rx = &self.vec_client[client_index].3;
+                    
+                    result = client_rx.try_recv_timeout(timeout_duration);
+                    if result.is_err(){
+                        self.vec_client_done[client_index] = true;
+                        trace!("client {} timeout", client_index.to_string());
+                        client_index = (client_index + 1)%(self.vec_client.len());
+                        continue
+                    }
+                    client_pm = result.unwrap();
+                    txid = client_pm.txid.as_str();
+                    sid = client_pm.senderid.as_str();
+                    opid = client_pm.opid;
+                    uid = client_pm.uid;
+                    trace!("client request received {}", &txid);
+                    
+                    self.request_status = RequestStatus::Unknown;
+                    self.state = CoordinatorState::ReceivedRequest;
+                }
+                CoordinatorState::ReceivedRequest =>{
+                    let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, uid, String::from(txid), String::from(sid), opid);                
+                    let result = self.send_participants(msg.clone());
+                    if !result{
+                        //self.unknown_ops += 1;
+                        break;
+                    }
+                    self.state = CoordinatorState::ProposalSent;
+                }
+                CoordinatorState::ProposalSent =>{
+                    let result = self.receive_participants(timeout_duration);
+                    if result == message::RequestStatus::Unknown {
+                        //self.unknown_ops += 1;
+                        break;
+                    }
+                    //participant abort in phase 1
+                    else if result == message::RequestStatus::Aborted {                        
+                        self.state = CoordinatorState::ReceivedVotesAbort;
+                        self.request_status = RequestStatus::Aborted;
+                        self.failed_ops += 1; 
+                        continue;
+                    }
+                    self.state = CoordinatorState::ReceivedP1VotesCommit;
+                    
+                    
+                }
+                CoordinatorState::ReceivedP1VotesCommit =>{
+                    let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorCommit, uid, String::from(txid), String::from(sid), opid);
+                    let result = self.send_participants(msg.clone());
+                    if !result{
+                        //self.unknown_ops += 1;
+                        break;
+                    }
+                    self.state = CoordinatorState::SentP1Commit;
+                }
+                CoordinatorState::SentP1Commit =>{
+                    let result = self.receive_participants(timeout_duration);
+                    if result == message::RequestStatus::Unknown {
+                        //self.unknown_ops += 1;
+                        break;
+                    }else if result == message::RequestStatus::Aborted {
+                        self.state = CoordinatorState::ReceivedVotesAbort;
+                        self.request_status = RequestStatus::Aborted;
+                        self.failed_ops += 1; 
+                        continue;
+                    }
+                    self.state = CoordinatorState::ReceivedP2VotesCommit;                    
+                    self.successful_ops += 1;                
+                    self.log.append(message::MessageType::CoordinatorCommit, String::from(txid), String::from(sid), opid);
+                    self.request_status = RequestStatus::Committed;
+                }
+                CoordinatorState::ReceivedP2VotesCommit =>{
+                    let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorCommit, uid, String::from(txid), String::from(sid), opid);
+                    self.send_participants(msg.clone());
+                    msg.mtype = message::MessageType::ClientResultCommit;
+                    let client_tx = &self.vec_client[client_index].2;
+                    client_tx.send(msg).unwrap();
+                    trace!("{} commited", &txid);
+                    self.state = CoordinatorState::SentGlobalDecision;
+                }
+                CoordinatorState::ReceivedVotesAbort => {
+                    let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorAbort, uid, String::from(txid), String::from(sid), opid);                           
+                    self.log.append(message::MessageType::CoordinatorAbort, String::from(txid), String::from(sid), opid);
+                    self.send_participants(msg.clone());
+                    msg.mtype = message::MessageType::ClientResultAbort;
+                    let client_tx = &self.vec_client[client_index].2;
+                    client_tx.send(msg).unwrap();
+                    trace!("{} aborted", &txid);
+                    self.state = CoordinatorState::SentGlobalDecision;
+                }
+                CoordinatorState::SentGlobalDecision =>{
+                    
+                    client_index = (client_index + 1)%(self.vec_client.len());
+                    self.state = CoordinatorState::Quiescent;
+                }
+            }
+            
             //receive request from client
-            for n in 0..self.vec_client.len(){
+            /*for n in 0..self.vec_client.len(){
                 if self.vec_client_done[n]{
                     client_done += 1;
                     continue;
@@ -314,7 +427,7 @@ impl Coordinator {
             }
             if client_done == self.vec_client.len(){
                 break;
-            }
+            }*/
         }
         self.coordinator_exit();         
         self.report_status();

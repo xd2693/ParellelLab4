@@ -131,6 +131,7 @@ impl Client {
             self.failed_ops += 1;
         }else{
             self.unknown_ops += 1;
+            //warn!("unknown {}", self.id_str);
         }
        
 
@@ -164,11 +165,13 @@ impl Client {
         
         for n in 0..n_requests {
             if !self.running.load(Ordering::SeqCst) {
+                //warn!("ctrl c {}", self.id_str);
                 break;
             }
             self.send_next_operation();
             if !self.running.load(Ordering::SeqCst) {
                 self.unknown_ops += 1;
+                //warn!("ctrl c after send {}", self.id_str);
                 break;
             }
             self.recv_result();

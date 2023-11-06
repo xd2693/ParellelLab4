@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::thread;
 
+use ipc_channel::ipc::IpcError;
 use participant::rand::prelude::*;
 use participant::ipc_channel::ipc::IpcReceiver as Receiver;
 use participant::ipc_channel::ipc::TryRecvError;
@@ -35,7 +36,9 @@ pub enum ParticipantState {
     Quiescent,
     ReceivedP1,
     VotedAbort,
-    VotedCommit,
+    VotedP1Commit,
+    SentP1Commit,
+    VotedP2Commit,
     AwaitingGlobalDecision,
 }
 
@@ -56,6 +59,7 @@ pub struct Participant {
     successful_ops: u64,
     failed_ops: u64,
     unknown_ops: u64,
+    request_status: RequestStatus,
 }
 
 ///
@@ -102,6 +106,7 @@ impl Participant {
             successful_ops: 0,
             failed_ops: 0,
             unknown_ops: 0,
+            request_status: RequestStatus::Committed,
         }
     }
 
@@ -113,10 +118,10 @@ impl Participant {
     ///
     /// HINT: You will need to implement the actual sending
     ///
-    pub fn send(&mut self, pm: ProtocolMessage, is_phase1: bool) {
+    pub fn send(&mut self, pm: ProtocolMessage) {
         let x: f64 = random();
         //trace!("random number is {}", x.to_string());
-        if x <= self.send_success_prob || is_phase1 {
+        if x <= self.send_success_prob  {
             // TODO: Send success
             let result = self.tx.send(pm);
             if result.is_err(){
@@ -140,7 +145,7 @@ impl Participant {
     ///       (it's ok to add parameters or return something other than
     ///       bool if it's more convenient for your design).
     ///
-    pub fn perform_operation(&mut self, request_option: &Option<ProtocolMessage>) -> bool {
+    pub fn perform_operation(&mut self, request_option: ProtocolMessage) -> bool {
 
         trace!("{}::Performing operation", self.id_str.clone());
         let x: f64 = random();
@@ -199,19 +204,167 @@ impl Participant {
         //let mut phase1 = false;
         //let mut phase2 = false;
         let timeout_duration = Duration::from_millis(100);
+        let mut txid= String::from("") ;
+        let mut uid = 0;
+        let binding = self.id_str.clone();
+        let mut sid = binding.as_str();
+        let mut opid = 0;
+        let mut result : Result<ProtocolMessage, IpcError> ;
+        let mut msg : message::ProtocolMessage ;
         // TODO
         loop {
             if !self.running.load(Ordering::SeqCst) {
                 break;
             }
+            match self.state{
+                ParticipantState::Quiescent => {
+                    result = self.rx.recv();
+                    if result.is_ok(){
+                        msg = result.unwrap();
+                        if msg.mtype == message::MessageType::CoordinatorPropose{
+                            trace!("{} received proposal", self.id_str.clone());
+                            
+                            txid = msg.txid.clone();
+                            uid = msg.uid;                            
+                            opid = msg.opid;
+                            self.state = ParticipantState::ReceivedP1;
+                            self.request_status = RequestStatus::Unknown;
+                            
+                        }else if msg.mtype == message::MessageType::CoordinatorExit {
+                            trace!("receive coordinator exit {}", self.id_str.to_owned());
+                            break;
+                        }
+                    }else{
+                        warn!("receive proposal fail in {}", self.id_str.to_owned());
+                        break;
+                    }
+                }
+                ParticipantState::ReceivedP1 =>{
+                    msg = message::ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, 
+                                                                                    uid,
+                                                                                    txid.clone(), 
+                                                                                    String::from(sid), 
+                                                                                    opid);
+                    let op = self.perform_operation(msg.clone());
+                    
+                    if !op {
+                        //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
+                        self.state = ParticipantState::VotedAbort;
+                        self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                    }else{
+                        self.state = ParticipantState::VotedP1Commit;
+                    }                                                          
+                    
+                    
+                }
+                ParticipantState::VotedP1Commit =>{
+                    let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteCommit, 
+                                                                                        uid,
+                                                                                        txid.clone(), 
+                                                                                        String::from(sid), 
+                                                                                        opid);
+                    self.send(my_msg);
+                    self.state = ParticipantState::SentP1Commit;
+                }
+                ParticipantState::SentP1Commit =>{
+                    result = self.rx.recv();
+                    if result.is_ok(){
+                        msg = result.unwrap();
+                        //phase 1 committed
+                        if msg.mtype == message::MessageType::CoordinatorCommit{
+                            trace!("{} received commit, start phase 2", self.id_str.clone());
+                            let op = self.perform_operation(msg.clone());
+                            
+                            if !op {
+                                //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
+                                self.state = ParticipantState::VotedAbort;
+                                self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                            }else{
+                                self.state = ParticipantState::VotedP2Commit;
+                                self.log.append(message::MessageType::ParticipantVoteCommit, txid.clone(), String::from(sid), opid); 
+                            }  
+                            
+                        }
+                        //phase 1 aborted
+                        else if msg.mtype == message::MessageType::CoordinatorAbort{
+                            trace!("{} received abort in phase 1", self.id_str.clone());
+                            self.failed_ops += 1;
+                            let mtype = message::MessageType::CoordinatorAbort;
+                            self.log.append(mtype, txid.clone(), String::from(sid), opid);
+                            self.request_status = RequestStatus::Aborted;
+                            self.state = ParticipantState::Quiescent;
+                            continue;
+                        }
+                        //unknown exit
+                        else{
+                            trace!("receive coordinator exit {}", self.id_str.to_owned());
+                            self.unknown_ops += 1;
+                            break;
+                        }
+                        
+                    }else{
+                        warn!("receive phase 2 fail in {}", self.id_str.to_owned());
+                        self.unknown_ops += 1;
+                        break;
+                    }
+                }
+                ParticipantState::VotedP2Commit =>{
+                    let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteCommit, 
+                                                                                        uid,
+                                                                                        txid.clone(), 
+                                                                                        String::from(sid), 
+                                                                                        opid);
+                    self.send(my_msg);
+                    self.state = ParticipantState::AwaitingGlobalDecision;
+                }
+                ParticipantState::AwaitingGlobalDecision =>{
+                    result = self.rx.recv();
+                    if result.is_ok(){
+                        msg = result.unwrap();
+                        //phase 2 committed
+                        if msg.mtype == message::MessageType::CoordinatorCommit{
+                            trace!("{} received result commit", self.id_str.clone());
+                            self.successful_ops += 1;
+                            self.request_status = RequestStatus::Committed;
+                        }
+                        //phase 2 aborted
+                        else if msg.mtype == message::MessageType::CoordinatorAbort{
+                            trace!("{} received result abort", self.id_str.clone());
+                            self.failed_ops += 1; 
+                            self.request_status = RequestStatus::Aborted;                   
+                        }
+                        //unknown exit 
+                        else{
+                            trace!("receive coordinator exit {}", self.id_str.to_owned());
+                            self.unknown_ops += 1;
+                            break;
+                        }
+                        self.log.append(msg.mtype, txid.clone(), String::from(sid), opid);
+                    }else {
+                        warn!("receive phase 2 fail in {}", self.id_str.to_owned());
+                        self.unknown_ops += 1;
+                        break;
+                    }
+                    self.state = ParticipantState::Quiescent;
+                }
+                ParticipantState::VotedAbort =>{
+                    let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteAbort, 
+                                                                                        uid,
+                                                                                        txid.clone(), 
+                                                                                        String::from(sid), 
+                                                                                        opid);
+                    self.send(my_msg);
+                    self.state = ParticipantState::AwaitingGlobalDecision;
+                }
+            }
             //let result = self.rx.try_recv_timeout(timeout_duration);
             //phase 1: receive proposal from coordinator
-            let result = self.rx.recv();
+            /*let result = self.rx.recv();
             if result.is_ok(){
                 let msg = result.unwrap();
                 if msg.mtype == message::MessageType::CoordinatorPropose{
                     trace!("{} received proposal", self.id_str.clone());
-                    let op = self.perform_operation(&Some(msg.clone()));
+                    let op = self.perform_operation(msg.clone());
                     let mut my_msg = message::ProtocolMessage::generate(message::MessageType::ParticipantVoteCommit, 
                                                                                     msg.txid, 
                                                                                     msg.senderid, 
@@ -221,7 +374,7 @@ impl Participant {
                         
                         self.log.append(my_msg.mtype.clone(), my_msg.txid.clone(), my_msg.senderid.clone(), my_msg.opid);
                     }                                                          
-                    self.send(my_msg.clone(), true) ;
+                    self.send(my_msg.clone()) ;
                     //trace!("{} phase 1 sent", self.id_str);
                     
                 }else if msg.mtype == message::MessageType::CoordinatorExit {
@@ -239,7 +392,7 @@ impl Participant {
                 //phase 1 committed
                 if msg.mtype == message::MessageType::CoordinatorCommit{
                     trace!("{} received commit, start phase 2", self.id_str.clone());
-                    let op = self.perform_operation(&Some(msg.clone()));
+                    let op = self.perform_operation(msg.clone());
                     let mut my_msg = message::ProtocolMessage::generate(message::MessageType::ParticipantVoteCommit, 
                                                                                     msg.txid, 
                                                                                     msg.senderid, 
@@ -249,7 +402,7 @@ impl Participant {
                         //self.log.append(my_msg.mtype.clone(), my_msg.txid.clone(), my_msg.senderid.clone(), my_msg.opid); 
                     }
                                                                              
-                    self.send(my_msg.clone(), false) ;
+                    self.send(my_msg.clone()) ;
                     self.log.append(my_msg.mtype, my_msg.txid, my_msg.senderid, my_msg.opid);
                 }
                 //phase 1 aborted
@@ -298,7 +451,7 @@ impl Participant {
                 warn!("receive phase 2 fail in {}", self.id_str.to_owned());
                 self.unknown_ops += 1;
                 break;
-            }
+            }*/
 
         }
 
