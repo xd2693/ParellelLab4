@@ -8,6 +8,7 @@ extern crate rand;
 extern crate stderrlog;
 
 use std::collections::HashMap;
+use std::ptr::null;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -22,6 +23,8 @@ use message::MessageType;
 use message::ProtocolMessage;
 use message::RequestStatus;
 use oplog;
+
+use crate::message;
 
 ///
 /// ParticipantState
@@ -48,6 +51,11 @@ pub struct Participant {
     running: Arc<AtomicBool>,
     send_success_prob: f64,
     operation_success_prob: f64,
+    tx: Sender<ProtocolMessage>,
+    rx: Receiver<ProtocolMessage>,
+    successful_ops: u64,
+    failed_ops: u64,
+    unknown_ops: u64,
 }
 
 ///
@@ -77,7 +85,9 @@ impl Participant {
         log_path: String,
         r: Arc<AtomicBool>,
         send_success_prob: f64,
-        operation_success_prob: f64) -> Participant {
+        operation_success_prob: f64,
+        tx: Sender<ProtocolMessage>,
+        rx: Receiver<ProtocolMessage>) -> Participant {
 
         Participant {
             id_str: id_str,
@@ -87,6 +97,11 @@ impl Participant {
             send_success_prob: send_success_prob,
             operation_success_prob: operation_success_prob,
             // TODO
+            tx: tx,
+            rx: rx,
+            successful_ops: 0,
+            failed_ops: 0,
+            unknown_ops: 0,
         }
     }
 
@@ -98,12 +113,18 @@ impl Participant {
     ///
     /// HINT: You will need to implement the actual sending
     ///
-    pub fn send(&mut self, pm: ProtocolMessage) {
+    pub fn send(&mut self, pm: ProtocolMessage, is_phase1: bool) {
         let x: f64 = random();
-        if x <= self.send_success_prob {
+        //trace!("random number is {}", x.to_string());
+        if x <= self.send_success_prob || is_phase1 {
             // TODO: Send success
+            let result = self.tx.send(pm);
+            if result.is_err(){
+                info!("send err {}", self.id_str);
+            }
         } else {
             // TODO: Send fail
+            return;
         }
     }
 
@@ -125,11 +146,13 @@ impl Participant {
         let x: f64 = random();
         if x <= self.operation_success_prob {
             // TODO: Successful operation
+            return true;
         } else {
             // TODO: Failed operation
+            return false;
         }
 
-        true
+        
     }
 
     ///
@@ -143,7 +166,7 @@ impl Participant {
         let failed_ops: u64 = 0;
         let unknown_ops: u64 = 0;
 
-        println!("{:16}:\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}", self.id_str.clone(), successful_ops, failed_ops, unknown_ops);
+        println!("{:16}:\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}", self.id_str.clone(), self.successful_ops, self.failed_ops, self.unknown_ops);
     }
 
     ///
@@ -158,6 +181,8 @@ impl Participant {
             if !self.running.load(Ordering::SeqCst) {
                 break;
             }
+            let result = self.rx.recv();
+
         }
 
         trace!("{}::Exiting", self.id_str.clone());
@@ -171,10 +196,113 @@ impl Participant {
     ///
     pub fn protocol(&mut self) {
         trace!("{}::Beginning protocol", self.id_str.clone());
-
+        //let mut phase1 = false;
+        //let mut phase2 = false;
+        let timeout_duration = Duration::from_millis(100);
         // TODO
+        loop {
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
+            //let result = self.rx.try_recv_timeout(timeout_duration);
+            //phase 1: receive proposal from coordinator
+            let result = self.rx.recv();
+            if result.is_ok(){
+                let msg = result.unwrap();
+                if msg.mtype == message::MessageType::CoordinatorPropose{
+                    trace!("{} received proposal", self.id_str.clone());
+                    let op = self.perform_operation(&Some(msg.clone()));
+                    let mut my_msg = message::ProtocolMessage::generate(message::MessageType::ParticipantVoteCommit, 
+                                                                                    msg.txid, 
+                                                                                    msg.senderid, 
+                                                                                    msg.opid);
+                    if !op {
+                        my_msg.mtype = message::MessageType::ParticipantVoteAbort;
+                        
+                        self.log.append(my_msg.mtype.clone(), my_msg.txid.clone(), my_msg.senderid.clone(), my_msg.opid);
+                    }                                                          
+                    self.send(my_msg.clone(), true) ;
+                    //trace!("{} phase 1 sent", self.id_str);
+                    
+                }else if msg.mtype == message::MessageType::CoordinatorExit {
+                    trace!("receive coordinator exit {}", self.id_str.to_owned());
+                    break;
+                }
+            }else{
+                warn!("receive proposal fail in {}", self.id_str.to_owned());
+                break;
+            }
+            //phase 2: receive from coordinator
+            let result = self.rx.recv();
+            if result.is_ok(){
+                let msg = result.unwrap();
+                //phase 1 committed
+                if msg.mtype == message::MessageType::CoordinatorCommit{
+                    trace!("{} received commit, start phase 2", self.id_str.clone());
+                    let op = self.perform_operation(&Some(msg.clone()));
+                    let mut my_msg = message::ProtocolMessage::generate(message::MessageType::ParticipantVoteCommit, 
+                                                                                    msg.txid, 
+                                                                                    msg.senderid, 
+                                                                                    msg.opid);
+                    if !op {
+                        my_msg.mtype = message::MessageType::ParticipantVoteAbort;
+                        //self.log.append(my_msg.mtype.clone(), my_msg.txid.clone(), my_msg.senderid.clone(), my_msg.opid); 
+                    }
+                                                                             
+                    self.send(my_msg.clone(), false) ;
+                    self.log.append(my_msg.mtype, my_msg.txid, my_msg.senderid, my_msg.opid);
+                }
+                //phase 1 aborted
+                else if msg.mtype == message::MessageType::CoordinatorAbort{
+                    trace!("{} received abort in phase 1", self.id_str.clone());
+                    self.failed_ops += 1;
+                    let mtype = message::MessageType::CoordinatorAbort;
+                    self.log.append(mtype, msg.txid, msg.senderid, msg.opid);
+                    continue;
+                }
+                //unknown exit
+                else{
+                    trace!("receive coordinator exit {}", self.id_str.to_owned());
+                    self.unknown_ops += 1;
+                    break;
+                }
+                
+            }else{
+                warn!("receive phase 2 fail in {}", self.id_str.to_owned());
+                self.unknown_ops += 1;
+                break;
+            }
+            //receive final result from coordinator
+            let result = self.rx.recv();
+            if result.is_ok(){
+                let msg = result.unwrap();
+                //phase 2 committed
+                if msg.mtype == message::MessageType::CoordinatorCommit{
+                    trace!("{} received result commit", self.id_str.clone());
+                    self.successful_ops += 1;
 
-        self.wait_for_exit_signal();
+                }
+                //phase 2 aborted
+                else if msg.mtype == message::MessageType::CoordinatorAbort{
+                    trace!("{} received result abort", self.id_str.clone());
+                    self.failed_ops += 1;                    
+                }
+                //unknown exit 
+                else{
+                    trace!("receive coordinator exit {}", self.id_str.to_owned());
+                    self.unknown_ops += 1;
+                    break;
+                }
+                self.log.append(msg.mtype, msg.txid, msg.senderid, msg.opid);
+            }else {
+                warn!("receive phase 2 fail in {}", self.id_str.to_owned());
+                self.unknown_ops += 1;
+                break;
+            }
+
+        }
+
+        //self.wait_for_exit_signal();
         self.report_status();
     }
 }

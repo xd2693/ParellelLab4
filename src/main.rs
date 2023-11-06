@@ -47,9 +47,11 @@ fn spawn_child_and_connect(child_opts: &mut tpcoptions::TPCOptions, pside_name_r
     let (tx, rx) = channel().unwrap();
     //To do
     // Name exchange through existing parent one shot server
-    let (dick, pside_name_tx_name) = pside_name_rx.accept().unwrap();
+    let (pside_name_rx, pside_name_tx_name) = pside_name_rx.accept().unwrap();
+    
+    let pside_sender_tx_name = pside_name_rx.recv().unwrap();
+    
     let pside_name_tx = Sender::connect(pside_name_tx_name).unwrap();
-    let pside_sender_tx_name = dick.recv().unwrap();
     // Send sender_tx_name to child
     let (pside_sender_rx, pside_sender_rx_name) = IpcOneShotServer::new().unwrap();
     pside_name_tx.send(pside_sender_rx_name.clone()).unwrap();
@@ -57,10 +59,10 @@ fn spawn_child_and_connect(child_opts: &mut tpcoptions::TPCOptions, pside_name_r
     let pside_sender_tx = Sender::connect(pside_sender_tx_name).unwrap();
     pside_sender_tx.send(tx).unwrap();
     let (_, tx) : (_, Sender<ProtocolMessage>) = pside_sender_rx.accept().unwrap();
-    let msg = ProtocolMessage::generate(message::MessageType::CoordinatorCommit, String::from("parent"), String::from("failed"), child_opts.num.clone());
-    tx.send(msg).unwrap();
-    let result : ProtocolMessage = rx.recv().unwrap();
-    warn!("Parent received protocol {:?}_{}_{}_{}", result.mtype.clone(), result.txid.clone(), result.senderid.clone(), result.opid.clone());
+    //let msg = ProtocolMessage::generate(message::MessageType::CoordinatorCommit, String::from("parent"), String::from("failed"), child_opts.num.clone());
+    //tx.send(msg).unwrap();
+    //let result : ProtocolMessage = rx.recv().unwrap();
+    //warn!("Parent received protocol {:?}_{}_{}_{}", result.mtype.clone(), result.txid.clone(), result.senderid.clone(), result.opid.clone());
     (child, tx, rx)
 }
 
@@ -90,11 +92,11 @@ fn connect_to_coordinator(opts: &tpcoptions::TPCOptions) -> (Sender<ProtocolMess
     let cside_sender_tx = Sender::connect(cside_sender_tx_name).unwrap();
     cside_sender_tx.send(tx).unwrap();
     let(_, tx) : (_, Sender<ProtocolMessage>) = cside_sender_rx.accept().unwrap();
-    let msg = ProtocolMessage::generate(message::MessageType::ClientRequest, opts.mode.clone(), String::from("sent"), opts.num.clone());
-    tx.send(msg).unwrap();
-    let result : ProtocolMessage = rx.recv().unwrap();
-    warn!("{}_{} received protocol {:?}_{}_{}_{}", opts.mode.clone(), opts.num.clone(), result.mtype.clone(), 
-                                              result.txid.clone(), result.senderid.clone(), result.opid.clone());
+    //let msg = ProtocolMessage::generate(message::MessageType::ClientRequest, opts.mode.clone(), String::from("sent"), opts.num.clone());
+    //tx.send(msg).unwrap();
+    //let result : ProtocolMessage = rx.recv().unwrap();
+    //warn!("{}_{} received protocol {:?}_{}_{}_{}", opts.mode.clone(), opts.num.clone(), result.mtype.clone(), 
+    //                                          result.txid.clone(), result.senderid.clone(), result.opid.clone());
     (tx, rx)
 }
 
@@ -117,20 +119,20 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
 
     // TODO
     let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running);
-    info!("Created IPC {coord_log_path}");
+    //info!("Created IPC {coord_log_path}");
 
     let mut cCount = 0;
     let mut optsClient = opts.clone();
     optsClient.mode = String::from("client");
-    loop {
-        if cCount == opts.num_clients {
-            break;
-        }
+    for n in 0..opts.num_clients {
         optsClient.num = cCount;
         let (pside_name_rx, pside_name_rx_name) = IpcOneShotServer::new().unwrap();
         optsClient.ipc_path = pside_name_rx_name.clone();
-        info!("One shot server name {}", pside_name_rx_name.clone());
-        let (_, sender, receiver) = spawn_child_and_connect(&mut optsClient, pside_name_rx);
+        //info!("One shot server name {}", pside_name_rx_name.clone());
+        //let (child, sender, receiver) = spawn_child_and_connect(&mut optsClient, pside_name_rx);  
+        let client = spawn_child_and_connect(&mut optsClient, pside_name_rx);
+        let client_id_str = format!("client_{}", cCount);
+        coordinator.client_join(&client_id_str, client);
         cCount += 1;
     }
     info!("Created {} clients", optsClient.num_clients);
@@ -138,18 +140,19 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let mut pCount = 0;
     let mut optsParticipant = opts.clone();
     optsParticipant.mode = String::from("participant");
-    loop {
-        if pCount == opts.num_participants {
-            break;
-        }
+    for n in 0..opts.num_participants {
         optsParticipant.num = pCount;
         let (pside_name_rx, pside_name_rx_name) = IpcOneShotServer::new().unwrap();
         optsParticipant.ipc_path = pside_name_rx_name.clone();
-        info!("One shot server name {}", pside_name_rx_name.clone());
-        let (_, sender, receiver) = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
+        //info!("One shot server name {}", pside_name_rx_name.clone());
+        //let (child, sender, receiver) = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
+        let participant = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
+        let participant_id_str = format!("participant_{}", pCount);
+        coordinator.participant_join(&participant_id_str, participant);
         pCount += 1;
+
     }
-    info!("Created {} participants", optsParticipant.num_participants);
+    //info!("Created {} participants", optsParticipant.num_participants);
 
     coordinator.protocol();
 }
@@ -167,9 +170,10 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
 fn run_client(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     // TODO
     let client_id_str = format!("client_{}", opts.num);
-    let client_log_path = format!("{}//{}", opts.log_path, client_id_str);
-    let mut client = Client::new(client_id_str, running);
+    //let client_log_path = format!("{}//{}", opts.log_path, client_id_str);
+    
     let (sender, receiver) = connect_to_coordinator(opts);
+    let mut client = Client::new(client_id_str, running, sender, receiver);
     client.protocol(opts.num_requests);
 }
 
@@ -188,9 +192,10 @@ fn run_participant(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let participant_log_path = format!("{}//{}.log", opts.log_path, participant_id_str);
 
     // TODO
-    let mut participant = Participant::new(participant_id_str, participant_log_path, running.clone(), opts.send_success_probability, opts.operation_success_probability);
-    println!("Created {} participant", opts.num);
+    
+    //println!("Created {} participant", opts.num);
     let (sender, receiver) = connect_to_coordinator(opts);
+    let mut participant = Participant::new(participant_id_str, participant_log_path, running.clone(), opts.send_success_probability, opts.operation_success_probability, sender, receiver);
     participant.protocol();
 }
 
@@ -217,7 +222,7 @@ fn main() {
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
         if m == "run" {
-            print!("\n");
+            print!("exit ctrl-c\n");
         }
     }).expect("Error setting signal handler!");
 
