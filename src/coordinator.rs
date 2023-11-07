@@ -218,7 +218,7 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let timeout_duration = Duration::from_millis(100);
+        let timeout_duration = Duration::from_millis(5);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
@@ -246,7 +246,7 @@ impl Coordinator {
                     result = client_rx.try_recv_timeout(timeout_duration);
                     if result.is_err(){
                         self.vec_client_done[client_index] = true;
-                        trace!("client {} timeout", client_index.to_string());
+                        //trace!("client {} timeout", client_index.to_string());
                         client_index = (client_index + 1)%(self.vec_client.len());
                         continue
                     }
@@ -255,7 +255,7 @@ impl Coordinator {
                     sid = client_pm.senderid.as_str();
                     opid = client_pm.opid;
                     uid = client_pm.uid;
-                    trace!("client request received {}", &txid);
+                    //trace!("client request received {}", &txid);
                     
                     self.request_status = RequestStatus::Unknown;
                     self.state = CoordinatorState::ReceivedRequest;
@@ -317,7 +317,7 @@ impl Coordinator {
                     msg.mtype = message::MessageType::ClientResultCommit;
                     let client_tx = &self.vec_client[client_index].2;
                     client_tx.send(msg).unwrap();
-                    trace!("{} commited", &txid);
+                    //trace!("{} commited", &txid);
                     self.state = CoordinatorState::SentGlobalDecision;
                 }
                 CoordinatorState::ReceivedVotesAbort => {
@@ -327,13 +327,15 @@ impl Coordinator {
                     msg.mtype = message::MessageType::ClientResultAbort;
                     let client_tx = &self.vec_client[client_index].2;
                     client_tx.send(msg).unwrap();
-                    trace!("{} aborted", &txid);
+                    //trace!("{} aborted", &txid);
                     self.state = CoordinatorState::SentGlobalDecision;
                 }
                 CoordinatorState::SentGlobalDecision =>{
                     
                     client_index = (client_index + 1)%(self.vec_client.len());
+                    
                     self.state = CoordinatorState::Quiescent;
+                    thread::sleep(Duration::from_millis(5));
                 }
             }
             

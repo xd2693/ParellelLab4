@@ -1,7 +1,6 @@
 extern crate serde;
 extern crate serde_json;
 extern crate bincode;
-extern crate commitlog;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -9,8 +8,6 @@ use std::io::BufReader;
 use std::io::prelude::*;
 use std::sync::Arc;
 use std::sync::Mutex;
-use commitlog::*;
-use std::os::unix;
 
 use message;
 
@@ -36,7 +33,7 @@ impl OpLog {
             seqno: 0,
             log_arc: arc,
             path: fpath.to_string(),
-            lf: CommitLog::new(LogOptions::new(path)).unwrap(),
+            lf: File::create(fpath).unwrap(),
         }
     }
 

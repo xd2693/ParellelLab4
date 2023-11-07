@@ -110,7 +110,7 @@ impl Client {
 
         // TODO
         let _ = self.tx.send(pm);
-        trace!("{}::Sent operation #{}", self.id_str.clone(), self.num_requests);
+        //trace!("{}::Sent operation #{}", self.id_str.clone(), self.num_requests);
     }
 
     ///
@@ -121,7 +121,7 @@ impl Client {
     ///
     pub fn recv_result(&mut self) {
 
-        info!("{}::Receiving Coordinator Result", self.id_str.clone());
+        //info!("{}::Receiving Coordinator Result", self.id_str.clone());
 
         // TODO
         let result : ProtocolMessage = self.rx.recv().unwrap();
@@ -161,7 +161,7 @@ impl Client {
     pub fn protocol(&mut self, n_requests: u32) {
 
         // TODO
-        info!("Sending {} requests", n_requests);
+        //info!("Sending {} requests", n_requests);
         
         for n in 0..n_requests {
             if !self.running.load(Ordering::SeqCst) {

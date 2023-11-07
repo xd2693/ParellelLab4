@@ -147,7 +147,7 @@ impl Participant {
     ///
     pub fn perform_operation(&mut self, request_option: ProtocolMessage) -> bool {
 
-        trace!("{}::Performing operation", self.id_str.clone());
+        //trace!("{}::Performing operation", self.id_str.clone());
         let x: f64 = random();
         if x <= self.operation_success_prob {
             // TODO: Successful operation
@@ -200,7 +200,7 @@ impl Participant {
     /// HINT: Wait for some kind of exit signal before returning from the protocol!
     ///
     pub fn protocol(&mut self) {
-        trace!("{}::Beginning protocol", self.id_str.clone());
+        //trace!("{}::Beginning protocol", self.id_str.clone());
         //let mut phase1 = false;
         //let mut phase2 = false;
         let timeout_duration = Duration::from_millis(100);
@@ -222,7 +222,7 @@ impl Participant {
                     if result.is_ok(){
                         msg = result.unwrap();
                         if msg.mtype == message::MessageType::CoordinatorPropose{
-                            trace!("{} received proposal", self.id_str.clone());
+                            //trace!("{} received proposal", self.id_str.clone());
                             
                             txid = msg.txid.clone();
                             uid = msg.uid;                            
@@ -272,7 +272,7 @@ impl Participant {
                         msg = result.unwrap();
                         //phase 1 committed
                         if msg.mtype == message::MessageType::CoordinatorCommit{
-                            trace!("{} received commit, start phase 2", self.id_str.clone());
+                            //trace!("{} received commit, start phase 2", self.id_str.clone());
                             let op = self.perform_operation(msg.clone());
                             
                             if !op {
@@ -287,7 +287,7 @@ impl Participant {
                         }
                         //phase 1 aborted
                         else if msg.mtype == message::MessageType::CoordinatorAbort{
-                            trace!("{} received abort in phase 1", self.id_str.clone());
+                            //trace!("{} received abort in phase 1", self.id_str.clone());
                             self.failed_ops += 1;
                             let mtype = message::MessageType::CoordinatorAbort;
                             self.log.append(mtype, txid.clone(), String::from(sid), opid);
@@ -323,13 +323,13 @@ impl Participant {
                         msg = result.unwrap();
                         //phase 2 committed
                         if msg.mtype == message::MessageType::CoordinatorCommit{
-                            trace!("{} received result commit", self.id_str.clone());
+                            //trace!("{} received result commit", self.id_str.clone());
                             self.successful_ops += 1;
                             self.request_status = RequestStatus::Committed;
                         }
                         //phase 2 aborted
                         else if msg.mtype == message::MessageType::CoordinatorAbort{
-                            trace!("{} received result abort", self.id_str.clone());
+                            //trace!("{} received result abort", self.id_str.clone());
                             self.failed_ops += 1; 
                             self.request_status = RequestStatus::Aborted;                   
                         }
