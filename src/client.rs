@@ -76,7 +76,7 @@ impl Client {
     /// wait_for_exit_signal(&mut self)
     /// Wait until the running flag is set by the CTRL-C handler
     ///
-    pub fn wait_for_exit_signal(&mut self) {
+    pub fn wait_for_exit_signal(&mut self, timeout_duration: Duration) {
         trace!("{}::Waiting for exit signal", self.id_str.clone());
 
         // TODO
@@ -84,10 +84,18 @@ impl Client {
             if !self.running.load(Ordering::SeqCst) {
                 break;
             }
-            let result = self.rx.recv().unwrap();
-            if result.mtype == message::MessageType::CoordinatorExit{
-                break;
+            let re = self.rx.try_recv();
+            match re {
+                Ok(result) =>{
+                    if result.mtype == message::MessageType::CoordinatorExit{
+                        break;
+                    }
+                }
+                Err(_) =>{
+                    thread::sleep(timeout_duration);
+                }
             }
+            
         }
 
         trace!("{}::Exiting", self.id_str.clone());
@@ -106,7 +114,7 @@ impl Client {
                                                     txid.clone(),
                                                     self.id_str.clone(),
                                                     self.num_requests);
-        info!("{}::Sending operation #{}", self.id_str.clone(), self.num_requests);
+        //info!("{}::Sending operation #{}", self.id_str.clone(), self.num_requests);
 
         // TODO
         let _ = self.tx.send(pm);
@@ -119,21 +127,31 @@ impl Client {
     /// last issued request. Note that we assume the coordinator does
     /// not fail in this simulation
     ///
-    pub fn recv_result(&mut self) {
+    pub fn recv_result(&mut self, timeout_duration: Duration) {
 
         //info!("{}::Receiving Coordinator Result", self.id_str.clone());
 
         // TODO
-        let result : ProtocolMessage = self.rx.recv().unwrap();
-        if result.mtype == message::MessageType::ClientResultCommit{
-            self.successful_ops += 1;
-        }else if result.mtype == message::MessageType::ClientResultAbort {
-            self.failed_ops += 1;
-        }else{
-            self.unknown_ops += 1;
-            //warn!("unknown {}", self.id_str);
+        loop{
+            let re = self.rx.try_recv();
+            match re {
+                Ok(result) =>{
+                    if result.mtype == message::MessageType::ClientResultCommit{
+                        self.successful_ops += 1;
+                    }else if result.mtype == message::MessageType::ClientResultAbort {
+                        self.failed_ops += 1;
+                    }else{
+                        self.unknown_ops += 1;
+                        //warn!("unknown {}", self.id_str);
+                    }
+                    break;
+                }
+                Err(_) =>{
+                    thread::sleep(timeout_duration);
+                }
+            }
+            
         }
-       
 
     }
 
@@ -162,7 +180,7 @@ impl Client {
 
         // TODO
         //info!("Sending {} requests", n_requests);
-        
+        let timeout_duration = Duration::from_millis(10);
         for n in 0..n_requests {
             if !self.running.load(Ordering::SeqCst) {
                 //warn!("ctrl c {}", self.id_str);
@@ -174,11 +192,11 @@ impl Client {
                 //warn!("ctrl c after send {}", self.id_str);
                 break;
             }
-            self.recv_result();
+            self.recv_result(timeout_duration);
         }
         //let sleep_duration = Duration::from_secs(5);
         //thread::sleep(sleep_duration);
-        self.wait_for_exit_signal();
+        self.wait_for_exit_signal(timeout_duration);
         self.report_status();
     }
 }
