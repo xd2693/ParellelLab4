@@ -170,7 +170,7 @@ impl Coordinator {
             if *pState{
                 //trace!("sent message to {}", participant_id);
                 //trace!("sending message vec {:?}", self.vec_participant);
-                participant_tx.send( msg.clone()).unwrap();
+                participant_tx.send( msg.clone());
             }
             
         }
@@ -222,7 +222,7 @@ impl Coordinator {
             let p_id = self.vec_participant_fail[i-1];
             let(participant_id, child, participant_tx, participant_rx, pState) = &self.vec_participant[p_id];
             let re_msg = ProtocolMessage::instantiate(message::MessageType::ParticipantRecover, 0, String::from("txid"), String::from("sid"), 0);
-            participant_tx.send(re_msg.clone()).unwrap();
+            participant_tx.send(re_msg.clone());
             let result = participant_rx.try_recv_timeout(timeout_duration);
             match result {
                 Ok(participant_pm) => {                            
@@ -249,10 +249,10 @@ impl Coordinator {
                                 //trace!("CoordinatorAbort {}", pm.txid.clone());
                             }
                             
-                            participant_tx.send(pm.clone()).unwrap();
+                            participant_tx.send(pm.clone());
                         }
                         let msg = ProtocolMessage::instantiate(message::MessageType::RecoveryDone, 0, String::from("txid"), String::from("sid"), 0);
-                        participant_tx.send(msg).unwrap();
+                        participant_tx.send(msg);
                         self.vec_participant[p_id].4 = true;
                         self.vec_participant_fail.remove(i-1);
                         //info!("i={}, vec {:?}",i, self.vec_participant_fail);

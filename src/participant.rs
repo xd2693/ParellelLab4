@@ -165,23 +165,24 @@ impl Participant {
         
     }
 
-    pub fn recovery_protocol(&mut self){
+    pub fn recovery_protocol(&mut self)->bool{
+        
+        //get the last line of log before crashing
         let mut last_log = self.log.read(&self.log_index);
         trace!("last_log {}", last_log.txid.clone());
 
         trace!("participant {}, query global dicision {}", self.id_str.clone(), last_log.txid.clone());
         let mut pm = last_log.clone();
         pm.mtype = message::MessageType::ParticipantRecover;
-        //let result = self.rx.recv();
+        //wait for coordinator to finish current transaction and send message to allow recover
         let re = self.rx.recv().unwrap();
         if re.mtype != message::MessageType::ParticipantRecover{
             if re.mtype == message::MessageType::CoordinatorExit{
                 self.unknown_ops += 1;
-                return;
             }else{
                 trace!("recover message type wrong {}", self.id_str.clone());
             }
-            
+            return false;
         }
         self.tx.send(pm.clone()).unwrap();
         loop{
@@ -220,7 +221,7 @@ impl Participant {
                 break;
             }
         }
-        
+        return true;
                 
     }
 
@@ -283,8 +284,10 @@ impl Participant {
             }
             match self.state{
                 ParticipantState::Fail=>{
-                    self.recovery_protocol();
-                    self.state = ParticipantState::Quiescent;
+                    if self.recovery_protocol(){
+                        self.state = ParticipantState::Quiescent;
+                    }
+                    
                 }
                 ParticipantState::Quiescent => {
                     result = self.rx.recv();
