@@ -40,6 +40,7 @@ pub enum ParticipantState {
     SentP1Commit,
     VotedP2Commit,
     AwaitingGlobalDecision,
+    Fail,
 }
 
 ///
@@ -60,6 +61,7 @@ pub struct Participant {
     failed_ops: u64,
     unknown_ops: u64,
     request_status: RequestStatus,
+    log_index : u32,
 }
 
 ///
@@ -107,6 +109,7 @@ impl Participant {
             failed_ops: 0,
             unknown_ops: 0,
             request_status: RequestStatus::Committed,
+            log_index: 0,
         }
     }
 
@@ -118,7 +121,7 @@ impl Participant {
     ///
     /// HINT: You will need to implement the actual sending
     ///
-    pub fn send(&mut self, pm: ProtocolMessage) {
+    pub fn send(&mut self, pm: ProtocolMessage) -> bool{
         let x: f64 = random();
         //trace!("random number is {}", x.to_string());
         if x <= self.send_success_prob  {
@@ -127,9 +130,11 @@ impl Participant {
             if result.is_err(){
                 info!("send err {}", self.id_str);
             }
+            return true;
         } else {
             // TODO: Send fail
-            return;
+            thread::sleep(Duration::from_millis(20));
+            return false;
         }
     }
 
@@ -160,6 +165,65 @@ impl Participant {
         
     }
 
+    pub fn recovery_protocol(&mut self){
+        let mut last_log = self.log.read(&self.log_index);
+        trace!("last_log {}", last_log.txid.clone());
+
+        trace!("participant {}, query global dicision {}", self.id_str.clone(), last_log.txid.clone());
+        let mut pm = last_log.clone();
+        pm.mtype = message::MessageType::ParticipantRecover;
+        //let result = self.rx.recv();
+        let re = self.rx.recv().unwrap();
+        if re.mtype != message::MessageType::ParticipantRecover{
+            if re.mtype == message::MessageType::CoordinatorExit{
+                self.unknown_ops += 1;
+                return;
+            }else{
+                trace!("recover message type wrong {}", self.id_str.clone());
+            }
+            
+        }
+        self.tx.send(pm.clone()).unwrap();
+        loop{
+            let result = self.rx.recv();
+            if result.is_ok(){        
+                let mut msg = result.unwrap();
+                if last_log.mtype == message::MessageType::CoordinatorCommit || last_log.mtype == message::MessageType::CoordinatorAbort{
+                    last_log.mtype = message::MessageType::ParticipantRecover;
+                    continue;
+                }
+                if msg.mtype == message::MessageType::CoordinatorCommit{
+                    trace!("{} received result commit", self.id_str.clone());
+                    
+                    self.successful_ops += 1;
+                    self.request_status = RequestStatus::Committed;
+                }
+                
+                else if msg.mtype == message::MessageType::CoordinatorAbort{
+                    trace!("{} received result abort", self.id_str.clone());
+                    self.failed_ops += 1; 
+                    self.request_status = RequestStatus::Aborted;                   
+                }
+                else if msg.mtype == message::MessageType::RecoveryDone{
+                    break;
+                }
+                //unknown exit 
+                else if msg.mtype == message::MessageType::CoordinatorExit{
+                    trace!("receive coordinator exit {}", self.id_str.to_owned());
+                    self.unknown_ops += 1;
+                    break;
+                }
+                self.log.append(msg.mtype, msg.txid.clone(), String::from(self.id_str.clone()), msg.opid);
+                self.log_index += 1;
+            }else{
+                warn!("receive recovery fail in {}", self.id_str.to_owned());
+                break;
+            }
+        }
+        
+                
+    }
+
     ///
     /// report_status()
     /// Report the abort/commit/unknown status (aggregate) of all transaction
@@ -186,12 +250,13 @@ impl Participant {
             if !self.running.load(Ordering::SeqCst) {
                 break;
             }
-            let result = self.rx.recv();
+            //let result = self.rx.recv();
 
         }
 
         trace!("{}::Exiting", self.id_str.clone());
     }
+    
 
     ///
     /// protocol()
@@ -217,6 +282,10 @@ impl Participant {
                 break;
             }
             match self.state{
+                ParticipantState::Fail=>{
+                    self.recovery_protocol();
+                    self.state = ParticipantState::Quiescent;
+                }
                 ParticipantState::Quiescent => {
                     result = self.rx.recv();
                     if result.is_ok(){
@@ -251,8 +320,11 @@ impl Participant {
                         //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
                         self.state = ParticipantState::VotedAbort;
                         self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                        self.log_index += 1;
                     }else{
                         self.state = ParticipantState::VotedP1Commit;
+                        self.log.append(message::MessageType::ParticipantReady, txid.clone(), String::from(sid), opid);
+                        self.log_index += 1;
                     }                                                          
                     
                     
@@ -263,8 +335,12 @@ impl Participant {
                                                                                         txid.clone(), 
                                                                                         String::from(sid), 
                                                                                         opid);
-                    self.send(my_msg);
-                    self.state = ParticipantState::SentP1Commit;
+                    if self.send(my_msg){
+                        self.state = ParticipantState::SentP1Commit;
+                    }else{
+                        self.state = ParticipantState::Fail;
+                    }
+                    
                 }
                 ParticipantState::SentP1Commit =>{
                     result = self.rx.recv();
@@ -279,9 +355,11 @@ impl Participant {
                                 //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
                                 self.state = ParticipantState::VotedAbort;
                                 self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                                self.log_index += 1;
                             }else{
                                 self.state = ParticipantState::VotedP2Commit;
                                 self.log.append(message::MessageType::ParticipantVoteCommit, txid.clone(), String::from(sid), opid); 
+                                self.log_index += 1;
                             }  
                             
                         }
@@ -291,6 +369,7 @@ impl Participant {
                             self.failed_ops += 1;
                             let mtype = message::MessageType::CoordinatorAbort;
                             self.log.append(mtype, txid.clone(), String::from(sid), opid);
+                            self.log_index += 1;
                             self.request_status = RequestStatus::Aborted;
                             self.state = ParticipantState::Quiescent;
                             continue;
@@ -314,8 +393,12 @@ impl Participant {
                                                                                         txid.clone(), 
                                                                                         String::from(sid), 
                                                                                         opid);
-                    self.send(my_msg);
-                    self.state = ParticipantState::AwaitingGlobalDecision;
+                    if self.send(my_msg){
+                        self.state = ParticipantState::AwaitingGlobalDecision;
+                    }else{
+                        self.state = ParticipantState::Fail;
+                    }
+                    
                 }
                 ParticipantState::AwaitingGlobalDecision =>{
                     result = self.rx.recv();
@@ -340,6 +423,7 @@ impl Participant {
                             break;
                         }
                         self.log.append(msg.mtype, txid.clone(), String::from(sid), opid);
+                        self.log_index += 1;
                     }else {
                         warn!("receive phase 2 fail in {}", self.id_str.to_owned());
                         self.unknown_ops += 1;
@@ -353,8 +437,11 @@ impl Participant {
                                                                                         txid.clone(), 
                                                                                         String::from(sid), 
                                                                                         opid);
-                    self.send(my_msg);
-                    self.state = ParticipantState::AwaitingGlobalDecision;
+                    if self.send(my_msg){
+                        self.state = ParticipantState::AwaitingGlobalDecision;
+                    }else{
+                        self.state = ParticipantState::Fail;
+                    }
                 }
             }
             //let result = self.rx.try_recv_timeout(timeout_duration);

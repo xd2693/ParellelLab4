@@ -93,6 +93,9 @@ fn check_participant(
 
         // Exactly one commit of txid per participant
         result &= found_local_txid == 1;
+        if found_local_txid !=1{
+            warn!("{} txid {}",participant, txid);
+        }
         assert!(found_local_txid == 1);
     }
     println!("{} OK: Committed: {} == {} (Committed-global), Aborted: {} <= {} (Aborted-global)",

@@ -19,6 +19,7 @@ use self::serde_json::Value;
 pub enum MessageType {
     ClientRequest,          // Request a transaction from the coordinator
     CoordinatorPropose,     // Coordinator sends propose work to participants
+    ParticipantReady,       // 
     ParticipantVoteCommit,  // Participant votes to commit in phase 1
     ParticipantVoteAbort,   // Participant votes to abort in phase 1
     CoordinatorAbort,       // Coordinator aborts in phase 2
@@ -26,6 +27,8 @@ pub enum MessageType {
     ClientResultCommit,     // result (success/fail) communicated to client
     ClientResultAbort,      // result (success/fail) communicated to client
     CoordinatorExit,        // Coordinator telling client/participant about shut down
+    ParticipantRecover,
+    RecoveryDone,
 }
 
 ///
