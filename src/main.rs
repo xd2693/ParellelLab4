@@ -23,6 +23,11 @@ pub mod client;
 pub mod checker;
 pub mod tpcoptions;
 use message::ProtocolMessage;
+use message::RequestStatus;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
+
 
 use crate::participant::Participant;
 
@@ -118,9 +123,11 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let coord_log_path = format!("{}//{}", opts.log_path, "coordinator.log");
 
     // TODO
-    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running);
+    let (heartbeat_tx, heartbeat_rx) = channel().unwrap();
+    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running, heartbeat_tx, opts.coordinator_fail_probability);
     //info!("Created IPC {coord_log_path}");
-
+    let mut vec_participant: Vec<Sender<ProtocolMessage>>= Vec::new();
+    let mut vec_client: Vec<Sender<ProtocolMessage>>= Vec::new();
     let mut cCount = 0;
     let mut optsClient = opts.clone();
     optsClient.mode = String::from("client");
@@ -132,6 +139,7 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
         //let (child, sender, receiver) = spawn_child_and_connect(&mut optsClient, pside_name_rx);  
         let client = spawn_child_and_connect(&mut optsClient, pside_name_rx);
         let client_id_str = format!("client_{}", cCount);
+        vec_client.push(client.1.clone());
         coordinator.client_join(&client_id_str, client);
         cCount += 1;
     }
@@ -148,13 +156,81 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
         //let (child, sender, receiver) = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
         let participant = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
         let participant_id_str = format!("participant_{}", pCount);
+        vec_participant.push(participant.1.clone());
         coordinator.participant_join(&participant_id_str, participant);
+
         pCount += 1;
 
     }
+    
     //info!("Created {} participants", optsParticipant.num_participants);
-
+    
+    
+    
+    //thread::spawn(move|| heartbeat_checker(heartbeat_rx, vec_participant, vec_client, coord_log_path, running));
+    
     coordinator.protocol();
+}
+
+fn heartbeat_checker(rx: Receiver<(RequestStatus, String, String, u32)>, vec_participant: Vec<Sender<ProtocolMessage>>, vec_client: Vec<Sender<ProtocolMessage>>, coord_log_path: String, running: Arc<AtomicBool>){
+    let mut state: message::RequestStatus= message::RequestStatus::Unknown;
+    let mut txid: String = String::from("");
+    let mut sid : String = String::from("");
+    let mut uid : u32 = 0;
+    let mut oid: u32 = 0;
+    let timeout_duration = Duration::from_millis(600);
+    let mut start_time = Instant::now();
+    let mut isFail = false;
+    
+    loop{
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+        let re = rx.try_recv();
+        match re {
+            Ok((st, tid, senderid, opid)) =>{
+                
+                state = st;
+                txid = tid;
+                sid = senderid;
+                oid = opid;
+                start_time = Instant::now();
+                isFail = false;
+            }
+            Err(_) =>{
+                thread::sleep(Duration::from_millis(5));
+            }
+            
+        }
+        if txid.as_str() =="exit"{
+            break;
+        }
+        if Instant::now().duration_since(start_time) >= timeout_duration && !isFail{
+            isFail = true;
+            match state{
+                message::RequestStatus::Committed =>{
+                    uid = 1;
+                }
+                message::RequestStatus::Aborted =>{
+                    uid = 2;
+                }
+                message::RequestStatus::Unknown =>{
+                    uid = 3;
+                    
+                }
+            }
+            let msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorFail, uid, txid.clone(), sid.clone(), oid);
+            //println!("coordinator fail! {} - {}", txid.clone().as_str(), uid);
+            for tx in &vec_participant{
+                tx.send(msg.clone());
+            }
+            for tx in &vec_client{
+                tx.send(msg.clone());
+            }
+            //In reality, do something to bring back coordinator. (wait for coordinator to recover in this test case)
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
 }
 
 ///

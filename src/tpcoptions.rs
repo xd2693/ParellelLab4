@@ -25,6 +25,7 @@ pub struct TPCOptions {
     pub log_path: String,                     // Directory for client, participant, and coordinator logs
     pub ipc_path: String,                     // Path to IPC socket for setting up communication with the coordinator
     pub num: u32,                             // Participant / Client number for naming the log files
+    pub coordinator_fail_probability: f64,    // Probability that the coordinator would fail/crash
 }
 
 impl TPCOptions {
@@ -46,6 +47,7 @@ impl TPCOptions {
         let default_log_path = "./logs/";
         let default_ipc_path = "none";
         let default_num = "0";
+        let default_coordinator_fail_probability = "0.0";
 
         // Set-Up clap
         let matches = App::new("concurrency-2pc")
@@ -102,6 +104,11 @@ impl TPCOptions {
                     .required(false)
                     .takes_value(true)
                     .help("Participant / Client number for naming the log files. Ranges from 0 to num_clients - 1 or num_participants - 1"))
+            .arg(Arg::with_name("coordinator_fail_probability")
+                    .short("f")
+                    .required(false)
+                    .takes_value(true)
+                    .help("Probability coordinator would fail/crash"))
             .get_matches();
 
         // Parse CLI options and take default values if none given
@@ -115,6 +122,7 @@ impl TPCOptions {
         let log_path = matches.value_of("log_path").unwrap_or(default_log_path);
         let ipc_path = matches.value_of("ipc_path").unwrap_or(default_ipc_path);
         let num = matches.value_of("num").unwrap_or(default_num).parse::<u32>().unwrap();
+        let coordinator_fail_probability = matches.value_of("coordinator_fail_probability").unwrap_or(default_coordinator_fail_probability).parse::<f64>().unwrap();
 
         // IPC path is necessary for client / participant to communicate with the coordinator
         match mode.as_ref() {
@@ -144,6 +152,7 @@ impl TPCOptions {
             log_path: log_path.to_string(),
             ipc_path: ipc_path.to_string(),
             num: num,
+            coordinator_fail_probability,
         }
     }
 
@@ -164,6 +173,7 @@ impl TPCOptions {
             format!("-l{}", self.log_path),
             format!("--ipc_path={}", self.ipc_path),
             format!("--num={}", self.num),
+            format!("-f{}", self.coordinator_fail_probability)
         ]
     }
 }

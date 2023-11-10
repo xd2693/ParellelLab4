@@ -32,6 +32,7 @@ pub struct Client {
     pub successful_ops: u64,
     pub failed_ops: u64,
     pub unknown_ops: u64,
+    pub txid : String,
 }
 
 ///
@@ -69,6 +70,7 @@ impl Client {
             successful_ops: 0,
             failed_ops: 0,
             unknown_ops: 0,
+            txid: String::from(""),
         }
     }
 
@@ -109,7 +111,8 @@ impl Client {
 
         // Create a new request with a unique TXID.
         self.num_requests = self.num_requests + 1;
-        let txid = format!("{}_op_{}", self.id_str.clone(), self.num_requests);
+        let mut txid = format!("{}_op_{}", self.id_str.clone(), self.num_requests);
+        self.txid = txid.clone();
         let pm = message::ProtocolMessage::generate(message::MessageType::ClientRequest,
                                                     txid.clone(),
                                                     self.id_str.clone(),
@@ -127,22 +130,37 @@ impl Client {
     /// last issued request. Note that we assume the coordinator does
     /// not fail in this simulation
     ///
-    pub fn recv_result(&mut self, timeout_duration: Duration) {
+    pub fn recv_result(&mut self, timeout_duration: Duration)  {
 
         //info!("{}::Receiving Coordinator Result", self.id_str.clone());
 
         // TODO
         loop{
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
             let re = self.rx.try_recv();
             match re {
                 Ok(result) =>{
                     if result.mtype == message::MessageType::ClientResultCommit{
-                        self.successful_ops += 1;
-                    }else if result.mtype == message::MessageType::ClientResultAbort {
-                        self.failed_ops += 1;
-                    }else{
-                        self.unknown_ops += 1;
-                        //warn!("unknown {}", self.id_str);
+                        if result.txid == self.txid{
+                            self.successful_ops += 1;
+                        }else{
+                            continue;
+                        }
+                        
+                    }
+                    else if result.mtype == message::MessageType::ClientResultAbort {
+                        if result.txid == self.txid{
+                            self.failed_ops += 1;
+                        }else{
+                            continue;
+                        }
+                        
+                    }
+                    // if coodinator fail, wait for message from coordinator 
+                    else if result.mtype == message::MessageType::CoordinatorFail{
+                        continue;                        
                     }
                     break;
                 }
@@ -152,6 +170,7 @@ impl Client {
             }
             
         }
+        
 
     }
 
@@ -187,6 +206,8 @@ impl Client {
                 break;
             }
             self.send_next_operation();
+            let sleep_duration = Duration::from_millis(10);
+            thread::sleep(sleep_duration);
             if !self.running.load(Ordering::SeqCst) {
                 self.unknown_ops += 1;
                 //warn!("ctrl c after send {}", self.id_str);
@@ -194,8 +215,7 @@ impl Client {
             }
             self.recv_result(timeout_duration);
         }
-        //let sleep_duration = Duration::from_secs(5);
-        //thread::sleep(sleep_duration);
+        
         self.wait_for_exit_signal(timeout_duration);
         self.report_status();
     }

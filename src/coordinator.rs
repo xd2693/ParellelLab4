@@ -7,6 +7,7 @@ extern crate stderrlog;
 extern crate rand;
 extern crate ipc_channel;
 
+
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use coordinator::ipc_channel::ipc::IpcSender as Sender;
 use coordinator::ipc_channel::ipc::IpcReceiver as Receiver;
 use coordinator::ipc_channel::ipc::TryRecvError;
 use coordinator::ipc_channel::ipc::channel;
+use coordinator::rand::prelude::*;
 
 use message;
 use message::MessageType;
@@ -40,7 +42,8 @@ pub enum CoordinatorState {
     ReceivedP1VotesCommit,
     SentP1Commit,
     ReceivedP2VotesCommit,
-    SentGlobalDecision
+    SentGlobalDecision,
+    CoordinatorFail
 }
 
 /// Coordinator
@@ -60,6 +63,8 @@ pub struct Coordinator {
     log_index:u32,
     vec_participant_done: Vec<bool>,
     vec_participant_fail: Vec<usize>,
+    heartbeat_tx: Sender<(RequestStatus, String, String, u32)>,
+    fail_prob: f64,
 }
 
 ///
@@ -84,7 +89,9 @@ impl Coordinator {
     ///
     pub fn new(
         log_path: String,
-        r: &Arc<AtomicBool>) -> Coordinator {
+        r: &Arc<AtomicBool>,
+        heartbeat_tx: Sender<(RequestStatus, String, String, u32)>,
+        fail_prob: f64) -> Coordinator {
 
         Coordinator {
             state: CoordinatorState::Quiescent,
@@ -101,6 +108,8 @@ impl Coordinator {
             log_index: 0,
             vec_participant_done: Vec::new(),
             vec_participant_fail: Vec::new(),
+            heartbeat_tx: heartbeat_tx,
+            fail_prob: fail_prob,
         }
     }
 
@@ -304,7 +313,7 @@ impl Coordinator {
                         participant_tx.send(msg);
                         self.vec_participant[p_id].4 = true;
                         self.vec_participant_fail.remove(i);
-                        warn!("participant {} recovered", p_id);
+                        //warn!("participant {} recovered", p_id);
                         
                         //info!("i={}, vec {:?}",i, self.vec_participant_fail);
                     }else{
@@ -330,7 +339,71 @@ impl Coordinator {
         //trace!("fail vec {:?}",self.vec_participant_fail);
     }
 
+    pub fn coordinator_recover(&mut self, txid: String, uid: u32, sid: String, opid: u32, client_index: usize){
+        warn!("in coordinator txid {}", txid.clone().as_str());
+        for n in 0..self.vec_participant.len(){
+            let (_, _, _,participant_rx,_) = &self.vec_participant[n];
+            let _ = participant_rx.try_recv();
+        }
+
+        let msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorFail, uid, txid.clone(), sid.clone(), opid);
+        self.send_participants(msg.clone());
+        
+        
+        if uid == 0{
+            let pm = message::ProtocolMessage::instantiate(MessageType::RecoveryDone, uid, txid.clone(), sid.clone(), opid);
+            self.send_participants(pm.clone());
+            self.state = CoordinatorState::Quiescent;
+            return;
+        }
+        let mut last_log = message::ProtocolMessage::instantiate(MessageType::RecoveryDone, uid, String::from(""), sid.clone(), opid);
+        if self.log_index > 0{
+            last_log = self.log.read(&self.log_index);
+        }
+
+        if last_log.txid != txid {
+            let mut pm = message::ProtocolMessage::instantiate(MessageType::CoordinatorAbort, uid, txid.clone(), sid.clone(), opid);
+        
+            self.log.append(MessageType::CoordinatorAbort, txid.clone(), sid.clone(), opid);
+            self.log_index += 1;
+            self.failed_ops += 1;
+          
+            self.send_participants(pm.clone());
+            pm.mtype = MessageType::ClientResultAbort;
+            let (_,_,client_tx,_) = &self.vec_client[client_index];
+            client_tx.send(pm.clone());
+            self.state = CoordinatorState::SentGlobalDecision;
+        }else{
+            self.send_participants(last_log.clone());
+            if last_log.mtype == MessageType::CoordinatorCommit{
+                last_log.mtype = MessageType::ClientResultCommit;
+                let (_,_,client_tx,_) = &self.vec_client[client_index];
+                
+                if last_log.senderid == self.vec_client[client_index].0 {
+                    client_tx.send(last_log.clone());
+                    self.state = CoordinatorState::SentGlobalDecision;
+                }else{
+                    self.state = CoordinatorState::Quiescent;
+                }
+                
+            }else if last_log.mtype == MessageType::CoordinatorAbort{
+                last_log.mtype = MessageType::ClientResultAbort;
+                let (_,_,client_tx,_) = &self.vec_client[client_index];
+                
+                if last_log.senderid == self.vec_client[client_index].0 {
+                    client_tx.send(last_log.clone());
+                    self.state = CoordinatorState::SentGlobalDecision;
+                }else{
+                    self.state = CoordinatorState::Quiescent;
+                }
+            }
+        }
+        
+        
+    }
+
     pub fn coordinator_exit(&mut self){
+        warn!("coordinator exiting!");
         let msg = ProtocolMessage::generate(message::MessageType::CoordinatorExit, String::from("Coordinator_exit"), String::from("0"), 0);                
         self.send_participants(msg.clone());
         for i in 0..self.vec_client.len(){            
@@ -349,7 +422,7 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let timeout_duration = Duration::from_millis(200);
+        let timeout_duration = Duration::from_millis(300);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
@@ -363,7 +436,13 @@ impl Coordinator {
             if !self.running.load(Ordering::SeqCst) {
                 break;
             }
+            
             match self.state{
+                CoordinatorState::CoordinatorFail =>{
+                    thread::sleep(Duration::from_millis(500));
+                    self.coordinator_recover(txid.clone().to_string(), uid, sid.clone().to_string(), opid, client_index);
+                    
+                }
                 CoordinatorState::Quiescent =>{
                     //trace!("Quiescent");
                     if self.vec_participant_fail.len() > 0{
@@ -378,22 +457,26 @@ impl Coordinator {
                     }
                     let client_rx = &self.vec_client[client_index].3;
                     
-                    result = client_rx.try_recv_timeout(timeout_duration);
+                    result = client_rx.try_recv_timeout(Duration::from_millis(20));
                     if result.is_err(){
                         self.vec_client_done[client_index] = true;
                         //trace!("client {} timeout", client_index.to_string());
                         client_index = (client_index + 1)%(self.vec_client.len());
-                        continue
+                        
+                    }else{
+                        client_pm = result.unwrap();
+                        txid = client_pm.txid.as_str();
+                        sid = client_pm.senderid.as_str();
+                        opid = client_pm.opid;
+                        uid = client_pm.uid;
+                        //trace!("client request received {}", &txid);
+                        
+                        self.request_status = RequestStatus::Unknown;
+                        self.state = CoordinatorState::ReceivedRequest;
+                        
                     }
-                    client_pm = result.unwrap();
-                    txid = client_pm.txid.as_str();
-                    sid = client_pm.senderid.as_str();
-                    opid = client_pm.opid;
-                    uid = client_pm.uid;
-                    //trace!("client request received {}", &txid);
                     
-                    self.request_status = RequestStatus::Unknown;
-                    self.state = CoordinatorState::ReceivedRequest;
+                    
                 }
                 CoordinatorState::ReceivedRequest =>{
                     //trace!("ReceivedRequest");
@@ -404,6 +487,8 @@ impl Coordinator {
                         break;
                     }
                     self.state = CoordinatorState::ProposalSent;
+                    
+                    
                 }
                 CoordinatorState::ProposalSent =>{
                     //trace!("ProposalSent");
@@ -432,6 +517,8 @@ impl Coordinator {
                         break;
                     }
                     self.state = CoordinatorState::SentP1Commit;
+                    
+                    
                 }
                 CoordinatorState::SentP1Commit =>{
                     //trace!("SentP1Commit");
@@ -450,6 +537,7 @@ impl Coordinator {
                     self.log.append(message::MessageType::CoordinatorCommit, String::from(txid), String::from(sid), opid);
                     self.log_index += 1;
                     self.request_status = RequestStatus::Committed;
+                    
                 }
                 CoordinatorState::ReceivedP2VotesCommit =>{
                     //trace!("ReceivedP2VotesCommit");
@@ -460,6 +548,7 @@ impl Coordinator {
                     client_tx.send(msg);
                     //trace!("{} commited", &txid);
                     self.state = CoordinatorState::SentGlobalDecision;
+                    
                 }
                 CoordinatorState::ReceivedVotesAbort => {
                     //trace!("ReceivedVotesAbort");
@@ -472,110 +561,26 @@ impl Coordinator {
                     client_tx.send(msg);
                     //trace!("{} aborted", &txid);
                     self.state = CoordinatorState::SentGlobalDecision;
+                    
                 }
                 CoordinatorState::SentGlobalDecision =>{
                     //trace!("SentGlobalDecision");
+                    
                     client_index = (client_index + 1)%(self.vec_client.len());
                     
                     self.state = CoordinatorState::Quiescent;
-                    
-                    
-                    //thread::sleep(Duration::from_millis(5));
+                                        
                 }
             }
-            
-            //receive request from client
-            /*for n in 0..self.vec_client.len(){
-                if self.vec_client_done[n]{
-                    client_done += 1;
-                    continue;
-                }
-                let client_rx = &self.vec_client[n].3;
-                
-                let result = client_rx.try_recv_timeout(timeout_duration);
-                if result.is_err(){
-                    self.vec_client_done[n] = true;
-                    trace!("client {} timeout", n.to_string());
-                    continue
-                }
-                
-                let client_pm = result.unwrap();
-                txid = client_pm.txid.as_str();
-                sid = client_pm.senderid.as_str();
-                opid = client_pm.opid;
-                trace!("client request received {}", &txid);
-                //self.request_status = RequestStatus::Unknown;   
-                                                           
-                //phase 1: send proprose to participants
-                let mut msg = ProtocolMessage::generate(message::MessageType::CoordinatorPropose, String::from(txid), String::from(sid), opid);                
-                let result = self.send_participants(msg.clone());
-                if !result{
-                    self.unknown_ops += 1;
-                    break;
-                }
-                
-                //phase 1: receive votes from participants
-                let result = self.receive_participants(timeout_duration);
-                if result == message::RequestStatus::Unknown {
-                    self.unknown_ops += 1;
-                    break;
-                }
-                //participant abort in phase 1
-                else if result == message::RequestStatus::Aborted {
-                    let mtype = message::MessageType::CoordinatorAbort;
-                    self.failed_ops += 1;
-                    msg.mtype = mtype;
-                    self.log.append(mtype, String::from(txid), String::from(sid), opid);
-                    self.send_participants(msg.clone());
-                    msg.mtype = message::MessageType::ClientResultAbort;
-                    let client_tx = &self.vec_client[n].2;
-                    client_tx.send(msg).unwrap();
-                    trace!("{} aborted", &txid);
-                    continue;
-                }
-                
-                //if all participants voted commit in phase 1,
-                //phase 2: send Coordinator commit to participants
-                trace!("all participants commit in phase 1 for {}",&txid);
-                msg.mtype = message::MessageType::CoordinatorCommit;
-                let result = self.send_participants(msg.clone());
-                if !result{
-                    self.unknown_ops += 1;
-                    break;
-                }
+            let x: f64 = random();
+            if x < self.fail_prob{
+                self.state = CoordinatorState::CoordinatorFail;
+            }
+            trace!("txid = {}", txid);
+            //self.heartbeat_tx.send((self.request_status.clone(), String::from(txid), String::from(sid), opid));
 
-                //phase 2: receive votes from participants
-                let result = self.receive_participants(timeout_duration);
-                if result == message::RequestStatus::Unknown {
-                    self.unknown_ops += 1;
-                    break;
-                }else if result == message::RequestStatus::Aborted {
-                    let mtype = message::MessageType::CoordinatorAbort;
-                    self.failed_ops += 1;
-                    msg.mtype = mtype;
-                    self.log.append(mtype, String::from(txid), String::from(sid), opid);
-                    self.send_participants(msg.clone());
-                    msg.mtype = message::MessageType::ClientResultAbort;
-                    let client_tx = &self.vec_client[n].2;
-                    client_tx.send(msg).unwrap();
-                    trace!("{} aborted", &txid);
-                    continue;
-                }
-                //all participants vote commit in phase 2, return commit to participants and client
-                let mtype = message::MessageType::CoordinatorCommit;
-                self.successful_ops += 1;
-                msg.mtype = mtype;
-                self.log.append(mtype, String::from(txid), String::from(sid), opid);
-                self.send_participants(msg.clone());
-                msg.mtype = message::MessageType::ClientResultCommit;
-                let client_tx = &self.vec_client[n].2;
-                client_tx.send(msg).unwrap();
-                trace!("{} commited", &txid);
-            }
-            if client_done == self.vec_client.len(){
-                break;
-            }*/
         }
+        //self.heartbeat_tx.send((self.request_status.clone(), String::from("exit"), String::from(sid), opid));
         self.coordinator_exit();         
         self.report_status();
     }

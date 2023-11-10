@@ -133,7 +133,7 @@ impl Participant {
             return true;
         } else {
             // TODO: Send fail
-            warn!("in participant, {} failed", self.id_str.clone());
+            //warn!("in participant, {} failed", self.id_str.clone());
             thread::sleep(Duration::from_millis(20));
             return false;
         }
@@ -166,7 +166,28 @@ impl Participant {
         
     }
 
-    pub fn recovery_protocol(&mut self, timeout_duration: Duration)->bool{
+    ///receive message from coordinator, use try_recv and sleep instead of block
+    pub fn receive_message(&mut self, sleep_duration: Duration) -> ProtocolMessage{
+        loop{
+            if !self.running.load(Ordering::SeqCst) {
+                let msg = message::ProtocolMessage::instantiate(message::MessageType::CoordinatorExit, 
+                    0,
+                    String::from(""), 
+                    String::from("sid"), 
+                    0);
+                return msg;
+            }
+            let result = self.rx.try_recv();
+            if result.is_ok(){
+                let msg = result.unwrap();
+                return msg;
+            }else{
+                thread::sleep(sleep_duration);
+            }
+        }
+    }
+
+    pub fn recovery_protocol(&mut self, sleep_duration: Duration)->bool{
         
         //get the last line of log before crashing
         let mut last_log = self.log.read(&self.log_index);
@@ -183,18 +204,25 @@ impl Participant {
                     if re.mtype != message::MessageType::ParticipantRecover{
                         if re.mtype == message::MessageType::CoordinatorExit{
                             self.unknown_ops += 1;
-                        }else{
+                        }else if re.mtype == message::MessageType::CoordinatorFail{
+                            continue;
+                        }
+                        else{
                             trace!("recover message type wrong {}", self.id_str.clone());
                         }
                         return false;
                     }
+                    
                     break;
                 }
                 Err(_) =>{
-                    thread::sleep(timeout_duration);
+                    thread::sleep(sleep_duration);
                 }
             }            
         }
+        //send last record in the local log to coordinator
+        //receive any missing logs from the coordinator and append to local log
+        //wait for the RecoveryDone message to return to normal protocol
         self.tx.send(pm.clone()).unwrap();
         loop{
             let result = self.rx.try_recv();
@@ -217,7 +245,7 @@ impl Participant {
                     self.request_status = RequestStatus::Aborted;                   
                 }
                 else if msg.mtype == message::MessageType::RecoveryDone{
-                    warn!("in participant, I recovered {} ", self.id_str.clone());
+                    //warn!("in participant, I recovered {} ", self.id_str.clone());
                     break;
                 }
                 //unknown exit 
@@ -229,12 +257,51 @@ impl Participant {
                 self.log.append(msg.mtype, msg.txid.clone(), String::from(self.id_str.clone()), msg.opid);
                 self.log_index += 1;
             }else{
-                thread::sleep(timeout_duration);
+                thread::sleep(sleep_duration);
             }
         }
        
         return true;
                 
+    }
+
+    pub fn coordinator_fail(&mut self, sleep_duration: Duration){
+            
+        let mut msg = self.receive_message(sleep_duration);
+        let mut last_log = message::ProtocolMessage::instantiate(msg.mtype.clone(), msg.uid, String::from(""), msg.senderid.clone(), msg.opid);
+        
+        warn!("in {}, coordinator fail detected {}", self.id_str, msg.txid.clone().as_str());
+        if self.log_index > 0 {
+            last_log = self.log.read(&self.log_index);
+        }
+        
+        let mut mtype = message::MessageType::CoordinatorAbort;
+        if msg.mtype == message::MessageType::CoordinatorExit{
+            trace!("receive coordinator exit {}", self.id_str.to_owned());
+            self.unknown_ops += 1;
+            
+        }    
+        if msg.mtype == MessageType::RecoveryDone {
+            self.state = ParticipantState::Quiescent;
+            
+        }
+        else {
+            if last_log.txid == msg.txid && last_log.mtype == msg.mtype{
+                self.state = ParticipantState::Quiescent;
+                
+            }else{
+                self.log.append(msg.mtype, msg.txid, self.id_str.clone(), msg.opid);
+                self.log_index += 1;
+                if msg.mtype == message::MessageType::CoordinatorAbort{
+                    self.failed_ops += 1;
+                }else if msg.mtype == message::MessageType::CoordinatorCommit{
+                    self.successful_ops += 1;
+                }
+                self.state = ParticipantState::Quiescent;
+                
+            }
+        }
+        warn!("coordinator recovered in participant {}", self.id_str);
     }
 
     ///
@@ -281,7 +348,8 @@ impl Participant {
         //trace!("{}::Beginning protocol", self.id_str.clone());
         //let mut phase1 = false;
         //let mut phase2 = false;
-        let timeout_duration = Duration::from_millis(2);
+        let sleep_duration = Duration::from_millis(3);
+        let op_sleep_duration = Duration::from_millis(5);
         let mut txid= String::from("") ;
         let mut uid = 0;
         let binding = self.id_str.clone();
@@ -296,31 +364,30 @@ impl Participant {
             }
             match self.state{
                 ParticipantState::Fail=>{
-                    if self.recovery_protocol(timeout_duration){
+                    if self.recovery_protocol(sleep_duration){
                         self.state = ParticipantState::Quiescent;
                     }
                     
                 }
                 ParticipantState::Quiescent => {
-                    result = self.rx.try_recv();
-                    if result.is_ok(){
-                        msg = result.unwrap();
-                        if msg.mtype == message::MessageType::CoordinatorPropose{
-                            //trace!("{} received proposal", self.id_str.clone());
-                            
-                            txid = msg.txid.clone();
-                            uid = msg.uid;                            
-                            opid = msg.opid;
-                            self.state = ParticipantState::ReceivedP1;
-                            self.request_status = RequestStatus::Unknown;
-                            
-                        }else if msg.mtype == message::MessageType::CoordinatorExit {
-                            trace!("receive coordinator exit {}", self.id_str.to_owned());
-                            break;
-                        }
-                    }else{
-                        thread::sleep(timeout_duration);
+                    msg = self.receive_message(sleep_duration);
+                    if msg.mtype == message::MessageType::CoordinatorPropose{
+                        //trace!("{} received proposal", self.id_str.clone());
+                        
+                        txid = msg.txid.clone();
+                        uid = msg.uid;                            
+                        opid = msg.opid;
+                        self.state = ParticipantState::ReceivedP1;
+                        self.request_status = RequestStatus::Unknown;
+                        
+                    }else if msg.mtype == message::MessageType::CoordinatorExit {
+                        trace!("receive coordinator exit {}", self.id_str.to_owned());
+                        break;
+                    }else if msg.mtype == message::MessageType::CoordinatorFail{
+                        self.coordinator_fail(sleep_duration);
                     }
+                    
+                    
                 }
                 ParticipantState::ReceivedP1 =>{
                     msg = message::ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, 
@@ -354,50 +421,48 @@ impl Participant {
                     }else{
                         self.state = ParticipantState::Fail;
                     }
-                    
+                    thread::sleep(op_sleep_duration);
                 }
                 ParticipantState::SentP1Commit =>{
-                    result = self.rx.try_recv();
-                    if result.is_ok(){
-                        msg = result.unwrap();
-                        //phase 1 committed
-                        if msg.mtype == message::MessageType::CoordinatorCommit{
-                            //trace!("{} received commit, start phase 2", self.id_str.clone());
-                            let op = self.perform_operation(msg.clone());
-                            
-                            if !op {
-                                //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
-                                self.state = ParticipantState::VotedAbort;
-                                self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
-                                self.log_index += 1;
-                            }else{
-                                self.state = ParticipantState::VotedP2Commit;
-                                self.log.append(message::MessageType::ParticipantVoteCommit, txid.clone(), String::from(sid), opid); 
-                                self.log_index += 1;
-                            }  
-                            
-                        }
-                        //phase 1 aborted
-                        else if msg.mtype == message::MessageType::CoordinatorAbort{
-                            //trace!("{} received abort in phase 1", self.id_str.clone());
-                            self.failed_ops += 1;
-                            let mtype = message::MessageType::CoordinatorAbort;
-                            self.log.append(mtype, txid.clone(), String::from(sid), opid);
-                            self.log_index += 1;
-                            self.request_status = RequestStatus::Aborted;
-                            self.state = ParticipantState::Quiescent;
-                            continue;
-                        }
-                        //unknown exit
-                        else if msg.mtype == message::MessageType::CoordinatorExit{
-                            trace!("receive coordinator exit {}", self.id_str.to_owned());
-                            self.unknown_ops += 1;
-                            break;
-                        }
+                    msg = self.receive_message(sleep_duration);
+                    //phase 1 committed
+                    if msg.mtype == message::MessageType::CoordinatorCommit{
+                        //trace!("{} received commit, start phase 2", self.id_str.clone());
+                        let op = self.perform_operation(msg.clone());
                         
-                    }else{
-                        thread::sleep(timeout_duration);
+                        if !op {
+                            //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
+                            self.state = ParticipantState::VotedAbort;
+                            self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                            self.log_index += 1;
+                        }else{
+                            self.state = ParticipantState::VotedP2Commit;
+                            self.log.append(message::MessageType::ParticipantVoteCommit, txid.clone(), String::from(sid), opid); 
+                            self.log_index += 1;
+                        }                      
                     }
+                    //phase 1 aborted
+                    else if msg.mtype == message::MessageType::CoordinatorAbort{
+                        //trace!("{} received abort in phase 1", self.id_str.clone());
+                        self.failed_ops += 1;
+                        let mtype = message::MessageType::CoordinatorAbort;
+                        self.log.append(mtype, txid.clone(), String::from(sid), opid);
+                        self.log_index += 1;
+                        self.request_status = RequestStatus::Aborted;
+                        self.state = ParticipantState::Quiescent;
+                        continue;
+                    }
+                    //unknown exit
+                    else if msg.mtype == message::MessageType::CoordinatorExit{
+                        trace!("receive coordinator exit {}", self.id_str.to_owned());
+                        self.unknown_ops += 1;
+                        break;
+                    }
+                    else if msg.mtype == message::MessageType::CoordinatorFail{
+                        self.coordinator_fail(sleep_duration);
+                    }
+                    
+                    
                 }
                 ParticipantState::VotedP2Commit =>{
                     let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteCommit, 
@@ -410,36 +475,36 @@ impl Participant {
                     }else{
                         self.state = ParticipantState::Fail;
                     }
+                    thread::sleep(op_sleep_duration);
                     
                 }
                 ParticipantState::AwaitingGlobalDecision =>{
-                    result = self.rx.try_recv();
-                    if result.is_ok(){
-                        msg = result.unwrap();
-                        //phase 2 committed
-                        if msg.mtype == message::MessageType::CoordinatorCommit{
-                            //trace!("{} received result commit", self.id_str.clone());
-                            self.successful_ops += 1;
-                            self.request_status = RequestStatus::Committed;
-                        }
-                        //phase 2 aborted
-                        else if msg.mtype == message::MessageType::CoordinatorAbort{
-                            //trace!("{} received result abort", self.id_str.clone());
-                            self.failed_ops += 1; 
-                            self.request_status = RequestStatus::Aborted;                   
-                        }
-                        //unknown exit 
-                        else if msg.mtype == message::MessageType::CoordinatorExit{
-                            trace!("receive coordinator exit {}", self.id_str.to_owned());
-                            self.unknown_ops += 1;
-                            break;
-                        }
-                        self.log.append(msg.mtype, txid.clone(), String::from(sid), opid);
-                        self.log_index += 1;
-                        self.state = ParticipantState::Quiescent;
-                    }else {
-                        thread::sleep(timeout_duration);
+                    msg = self.receive_message(sleep_duration);
+                    //phase 2 committed
+                    if msg.mtype == message::MessageType::CoordinatorCommit{
+                        //trace!("{} received result commit", self.id_str.clone());
+                        self.successful_ops += 1;
+                        self.request_status = RequestStatus::Committed;
                     }
+                    //phase 2 aborted
+                    else if msg.mtype == message::MessageType::CoordinatorAbort{
+                        //trace!("{} received result abort", self.id_str.clone());
+                        self.failed_ops += 1; 
+                        self.request_status = RequestStatus::Aborted;                   
+                    }
+                    //unknown exit 
+                    else if msg.mtype == message::MessageType::CoordinatorExit{
+                        trace!("receive coordinator exit {}", self.id_str.to_owned());
+                        self.unknown_ops += 1;
+                        break;
+                    }
+                    else if msg.mtype == message::MessageType::CoordinatorFail{
+                        self.coordinator_fail(sleep_duration);
+                        continue;
+                    }
+                    self.log.append(msg.mtype, txid.clone(), String::from(sid), opid);
+                    self.log_index += 1;
+                    self.state = ParticipantState::Quiescent;
                     
                 }
                 ParticipantState::VotedAbort =>{
@@ -453,107 +518,14 @@ impl Participant {
                     }else{
                         self.state = ParticipantState::Fail;
                     }
+                    thread::sleep(op_sleep_duration);
                 }
             }
-            //let result = self.rx.try_recv_timeout(timeout_duration);
-            //phase 1: receive proposal from coordinator
-            /*let result = self.rx.recv();
-            if result.is_ok(){
-                let msg = result.unwrap();
-                if msg.mtype == message::MessageType::CoordinatorPropose{
-                    trace!("{} received proposal", self.id_str.clone());
-                    let op = self.perform_operation(msg.clone());
-                    let mut my_msg = message::ProtocolMessage::generate(message::MessageType::ParticipantVoteCommit, 
-                                                                                    msg.txid, 
-                                                                                    msg.senderid, 
-                                                                                    msg.opid);
-                    if !op {
-                        my_msg.mtype = message::MessageType::ParticipantVoteAbort;
-                        
-                        self.log.append(my_msg.mtype.clone(), my_msg.txid.clone(), my_msg.senderid.clone(), my_msg.opid);
-                    }                                                          
-                    self.send(my_msg.clone()) ;
-                    //trace!("{} phase 1 sent", self.id_str);
-                    
-                }else if msg.mtype == message::MessageType::CoordinatorExit {
-                    trace!("receive coordinator exit {}", self.id_str.to_owned());
-                    break;
-                }
-            }else{
-                warn!("receive proposal fail in {}", self.id_str.to_owned());
-                break;
-            }
-            //phase 2: receive from coordinator
-            let result = self.rx.recv();
-            if result.is_ok(){
-                let msg = result.unwrap();
-                //phase 1 committed
-                if msg.mtype == message::MessageType::CoordinatorCommit{
-                    trace!("{} received commit, start phase 2", self.id_str.clone());
-                    let op = self.perform_operation(msg.clone());
-                    let mut my_msg = message::ProtocolMessage::generate(message::MessageType::ParticipantVoteCommit, 
-                                                                                    msg.txid, 
-                                                                                    msg.senderid, 
-                                                                                    msg.opid);
-                    if !op {
-                        my_msg.mtype = message::MessageType::ParticipantVoteAbort;
-                        //self.log.append(my_msg.mtype.clone(), my_msg.txid.clone(), my_msg.senderid.clone(), my_msg.opid); 
-                    }
-                                                                             
-                    self.send(my_msg.clone()) ;
-                    self.log.append(my_msg.mtype, my_msg.txid, my_msg.senderid, my_msg.opid);
-                }
-                //phase 1 aborted
-                else if msg.mtype == message::MessageType::CoordinatorAbort{
-                    trace!("{} received abort in phase 1", self.id_str.clone());
-                    self.failed_ops += 1;
-                    let mtype = message::MessageType::CoordinatorAbort;
-                    self.log.append(mtype, msg.txid, msg.senderid, msg.opid);
-                    continue;
-                }
-                //unknown exit
-                else{
-                    trace!("receive coordinator exit {}", self.id_str.to_owned());
-                    self.unknown_ops += 1;
-                    break;
-                }
-                
-            }else{
-                warn!("receive phase 2 fail in {}", self.id_str.to_owned());
-                self.unknown_ops += 1;
-                break;
-            }
-            //receive final result from coordinator
-            let result = self.rx.recv();
-            if result.is_ok(){
-                let msg = result.unwrap();
-                //phase 2 committed
-                if msg.mtype == message::MessageType::CoordinatorCommit{
-                    trace!("{} received result commit", self.id_str.clone());
-                    self.successful_ops += 1;
-
-                }
-                //phase 2 aborted
-                else if msg.mtype == message::MessageType::CoordinatorAbort{
-                    trace!("{} received result abort", self.id_str.clone());
-                    self.failed_ops += 1;                    
-                }
-                //unknown exit 
-                else{
-                    trace!("receive coordinator exit {}", self.id_str.to_owned());
-                    self.unknown_ops += 1;
-                    break;
-                }
-                self.log.append(msg.mtype, msg.txid, msg.senderid, msg.opid);
-            }else {
-                warn!("receive phase 2 fail in {}", self.id_str.to_owned());
-                self.unknown_ops += 1;
-                break;
-            }*/
+    
 
         }
 
-        //self.wait_for_exit_signal();
+        
         self.report_status();
     }
 }

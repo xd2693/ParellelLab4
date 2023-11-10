@@ -29,6 +29,7 @@ pub enum MessageType {
     CoordinatorExit,        // Coordinator telling client/participant about shut down
     ParticipantRecover,
     RecoveryDone,
+    CoordinatorFail,
 }
 
 ///
