@@ -1,22 +1,32 @@
 extern crate serde;
 extern crate serde_json;
 extern crate bincode;
+extern crate commitlog;
 
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
+//use std::intrinsics::size_of;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use oplog::commitlog::message::MessageSet;
+//use commitlog::reader::MessageBufReader;
+use oplog::commitlog::*;
 use message;
+use std::mem;
 
-#[derive(Debug)]
+use crate::message::ProtocolMessage;
+
+//#[derive(Debug)]
 pub struct OpLog {
     seqno: u32,
     log_arc: Arc<Mutex<HashMap<u32, message::ProtocolMessage>>>,
     path: String,
-    lf: File,
+    //lf: File,
+    lf: CommitLog,
 }
 
 impl OpLog {
@@ -29,11 +39,17 @@ impl OpLog {
         let l = HashMap::new();
         let lck = Mutex::new(l);
         let arc = Arc::new(lck);
+        let re= fs::remove_dir_all(fpath.clone());
+        if re.is_err(){
+            print!("delete dir err");
+        }
+
         OpLog {
             seqno: 0,
             log_arc: arc,
             path: fpath.to_string(),
-            lf: File::create(fpath).unwrap(),
+            //lf: File::create(fpath).unwrap(),
+            lf: CommitLog::new(LogOptions::new(fpath)).unwrap(),
         }
     }
 
@@ -46,9 +62,11 @@ impl OpLog {
         let mut seqno = 0;
         let mut l = HashMap::new();
         let scopy = fpath.clone();
-        let tlf = File::open(fpath).unwrap();
-        let mut reader = BufReader::new(&tlf);
-        let mut line = String::new();
+        //let tlf = File::open(fpath).unwrap();
+        let tlf = CommitLog::new(LogOptions::new(fpath)).unwrap();
+        //let mut reader = BufReader::new(&tlf);
+        
+        /*let mut line = String::new();
         let mut len = reader.read_line(&mut line).unwrap();
         while len > 0 {
             let pm = message::ProtocolMessage::from_string(&line);
@@ -58,7 +76,26 @@ impl OpLog {
             l.insert(pm.uid, pm);
             line.clear();
             len = reader.read_line(&mut line).unwrap();
+        }*/
+        let last = tlf.last_offset().unwrap();
+        
+        let mut offsets =0;
+        
+        while offsets <= last {
+            let messages = tlf.read(offsets, ReadLimit::default()).unwrap();
+            for msg in messages.iter(){
+                let st = String::from_utf8_lossy(msg.payload());
+                let s = format!("{}",st);
+                let pm = message::ProtocolMessage::from_string(&s);
+                println!("{}", serde_json::to_string(&pm).expect("read wrong"));
+                if pm.uid > seqno {
+                    seqno = pm.uid;
+                }
+                l.insert(pm.uid, pm);
+                offsets += 1;
+            }
         }
+        
         let lck = Mutex::new(l);
         let arc = Arc::new(lck);
         OpLog {
@@ -80,8 +117,9 @@ impl OpLog {
         self.seqno += 1;
         let id = self.seqno;
         let pm = message::ProtocolMessage::generate(t, tid, sender, op);
-        serde_json::to_writer(&mut self.lf, &pm).unwrap();
-        writeln!(&mut self.lf).unwrap();
+        //serde_json::to_writer(&mut self.lf, &pm).unwrap();
+        self.lf.append_msg(serde_json::to_string(&pm).expect("")).unwrap();
+        //writeln!(&mut self.lf).unwrap();
         self.lf.flush().unwrap();
         log.insert(id, pm);
     }

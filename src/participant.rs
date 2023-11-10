@@ -47,7 +47,7 @@ pub enum ParticipantState {
 /// Participant
 /// Structure for maintaining per-participant state and communication/synchronization objects to/from coordinator
 ///
-#[derive(Debug)]
+//#[derive(Debug)]
 pub struct Participant {
     id_str: String,
     state: ParticipantState,
@@ -348,8 +348,8 @@ impl Participant {
         //trace!("{}::Beginning protocol", self.id_str.clone());
         //let mut phase1 = false;
         //let mut phase2 = false;
-        let sleep_duration = Duration::from_millis(3);
-        let op_sleep_duration = Duration::from_millis(5);
+        let sleep_duration = Duration::from_millis(1);
+        let op_sleep_duration = Duration::from_millis(3);
         let mut txid= String::from("") ;
         let mut uid = 0;
         let binding = self.id_str.clone();

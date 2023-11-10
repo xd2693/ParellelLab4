@@ -124,10 +124,10 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
 
     // TODO
     let (heartbeat_tx, heartbeat_rx) = channel().unwrap();
-    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running, heartbeat_tx, opts.coordinator_fail_probability);
+    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running, heartbeat_tx, opts.coordinator_fail_stage);
     //info!("Created IPC {coord_log_path}");
-    let mut vec_participant: Vec<Sender<ProtocolMessage>>= Vec::new();
-    let mut vec_client: Vec<Sender<ProtocolMessage>>= Vec::new();
+    //let mut vec_participant: Vec<Sender<ProtocolMessage>>= Vec::new();
+    //let mut vec_client: Vec<Sender<ProtocolMessage>>= Vec::new();
     let mut cCount = 0;
     let mut optsClient = opts.clone();
     optsClient.mode = String::from("client");
@@ -139,7 +139,7 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
         //let (child, sender, receiver) = spawn_child_and_connect(&mut optsClient, pside_name_rx);  
         let client = spawn_child_and_connect(&mut optsClient, pside_name_rx);
         let client_id_str = format!("client_{}", cCount);
-        vec_client.push(client.1.clone());
+        //vec_client.push(client.1.clone());
         coordinator.client_join(&client_id_str, client);
         cCount += 1;
     }
@@ -156,7 +156,7 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
         //let (child, sender, receiver) = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
         let participant = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
         let participant_id_str = format!("participant_{}", pCount);
-        vec_participant.push(participant.1.clone());
+        //vec_participant.push(participant.1.clone());
         coordinator.participant_join(&participant_id_str, participant);
 
         pCount += 1;
