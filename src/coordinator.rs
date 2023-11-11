@@ -272,7 +272,7 @@ impl Coordinator {
         for n in 0..self.vec_participant_fail.len(){
             let p_id = self.vec_participant_fail[n];
             let(participant_id, child, participant_tx, participant_rx, pState) = &self.vec_participant[p_id];
-            let re_msg = ProtocolMessage::instantiate(message::MessageType::ParticipantRecover, 0, String::from("txid"), String::from("sid"), 0);
+            let re_msg = ProtocolMessage::instantiate(::MessageType::ParticipantRecover, 0, String::from("txid"), String::from("sid"), 0);
             participant_tx.send(re_msg.clone());
         }
         let mut start_time = Instant::now();
@@ -398,6 +398,9 @@ impl Coordinator {
                 }else{
                     self.state = CoordinatorState::Quiescent;
                 }
+            }else if last_log.mtype == MessageType::ParticipantReady{
+                self.send_participants(last_log.clone());
+                self.state = CoordinatorState::SentP1Commit;
             }
         }
         
@@ -449,7 +452,7 @@ impl Coordinator {
                 CoordinatorState::Quiescent =>{
                     //trace!("Quiescent");
                     if self.fail_stage == 1 && fail{
-                        warn!("Coordinator fail detected in stage {}", serde_json::to_string(&self.state).expect("fail to serialize"));
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
                         fail = false;            
                         continue;
@@ -489,10 +492,10 @@ impl Coordinator {
                 }
                 CoordinatorState::ReceivedRequest =>{
                     //trace!("ReceivedRequest");
-                    if self.fail_stage == 1 && fail{
+                    if self.fail_stage == 2 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
-                        fail = false;
-                        warn!("Coordinator fail detected in stage {}", serde_json::to_string(&self.state).expect("fail to serialize"));
+                        fail = false;            
                         continue;
                     }
                     let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, uid, String::from(txid), String::from(sid), opid);                
@@ -507,17 +510,19 @@ impl Coordinator {
                 }
                 CoordinatorState::ProposalSent =>{
                     //trace!("ProposalSent");
-                    if self.fail_stage == 3{
+                    if self.fail_stage == 3 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
+                        fail = false;            
                         continue;
                     }
                     let result = self.receive_participants(timeout_duration);
-                    if result == message::RequestStatus::Unknown {
+                    /*if result == message::RequestStatus::Unknown {
                         //self.unknown_ops += 1;
                         break;
-                    }
+                    }*/
                     //participant abort in phase 1
-                    else if result == message::RequestStatus::Aborted {                        
+                    if result == message::RequestStatus::Aborted {                        
                         self.state = CoordinatorState::ReceivedVotesAbort;
                         self.request_status = RequestStatus::Aborted;
                         self.failed_ops += 1; 
@@ -529,8 +534,10 @@ impl Coordinator {
                 }
                 CoordinatorState::ReceivedP1VotesCommit =>{
                     //trace!("ReceivedP1VotesCommit");
-                    if self.fail_stage == 4{
+                    if self.fail_stage == 4 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
+                        fail = false;            
                         continue;
                     }
                     let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorCommit, uid, String::from(txid), String::from(sid), opid);
@@ -539,14 +546,18 @@ impl Coordinator {
                         //self.unknown_ops += 1;
                         break;
                     }
+                    self.log.append(message::MessageType::ParticipantReady, String::from(txid), String::from(sid), opid);
+                    self.log_index += 1;
                     self.state = CoordinatorState::SentP1Commit;
                     
                     
                 }
                 CoordinatorState::SentP1Commit =>{
                     //trace!("SentP1Commit");
-                    if self.fail_stage == 5{
+                    if self.fail_stage == 5 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
+                        fail = false;            
                         continue;
                     }
                     let result = self.receive_participants(timeout_duration);
@@ -568,8 +579,10 @@ impl Coordinator {
                 }
                 CoordinatorState::ReceivedP2VotesCommit =>{
                     //trace!("ReceivedP2VotesCommit");
-                    if self.fail_stage == 6{
+                    if self.fail_stage == 6 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
+                        fail = false;            
                         continue;
                     }
                     let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorCommit, uid, String::from(txid), String::from(sid), opid);
@@ -583,8 +596,10 @@ impl Coordinator {
                 }
                 CoordinatorState::ReceivedVotesAbort => {
                     //trace!("ReceivedVotesAbort");
-                    if self.fail_stage == 7{
+                    if self.fail_stage == 7 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
+                        fail = false;            
                         continue;
                     }
                     let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorAbort, uid, String::from(txid), String::from(sid), opid);                           
@@ -600,8 +615,10 @@ impl Coordinator {
                 }
                 CoordinatorState::SentGlobalDecision =>{
                     //trace!("SentGlobalDecision");
-                    if self.fail_stage == 8{
+                    if self.fail_stage == 8 && fail{
+                        warn!("Coordinator fail detected in stage {:?}", &self.state);  
                         self.state = CoordinatorState::CoordinatorFail;
+                        fail = false;            
                         continue;
                     }
                     

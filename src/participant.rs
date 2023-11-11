@@ -195,16 +195,16 @@ impl Participant {
 
         trace!("participant {}, query global dicision {}", self.id_str.clone(), last_log.txid.clone());
         let mut pm = last_log.clone();
-        pm.mtype = message::MessageType::ParticipantRecover;
+        pm.mtype = MessageType::ParticipantRecover;
         //wait for coordinator to finish current transaction and send message to allow recover
         loop{        
             let result = self.rx.try_recv();
             match result {
                 Ok(re) => {
-                    if re.mtype != message::MessageType::ParticipantRecover{
-                        if re.mtype == message::MessageType::CoordinatorExit{
+                    if re.mtype != MessageType::ParticipantRecover{
+                        if re.mtype == MessageType::CoordinatorExit{
                             self.unknown_ops += 1;
-                        }else if re.mtype == message::MessageType::CoordinatorFail{
+                        }else if re.mtype == MessageType::CoordinatorFail{
                             continue;
                         }
                         else{
@@ -228,31 +228,34 @@ impl Participant {
             let result = self.rx.try_recv();
             if result.is_ok(){        
                 let mut msg = result.unwrap();
-                if last_log.mtype == message::MessageType::CoordinatorCommit || last_log.mtype == message::MessageType::CoordinatorAbort{
-                    last_log.mtype = message::MessageType::ParticipantRecover;
+                if last_log.mtype == MessageType::CoordinatorCommit || last_log.mtype == MessageType::CoordinatorAbort{
+                    last_log.mtype = MessageType::ParticipantRecover;
                     continue;
                 }
-                if msg.mtype == message::MessageType::CoordinatorCommit{
+                if msg.mtype == MessageType::CoordinatorCommit{
                     trace!("{} received result commit", self.id_str.clone());
                     
                     self.successful_ops += 1;
                     self.request_status = RequestStatus::Committed;
                 }
                 
-                else if msg.mtype == message::MessageType::CoordinatorAbort{
+                else if msg.mtype == MessageType::CoordinatorAbort{
                     trace!("{} received result abort", self.id_str.clone());
                     self.failed_ops += 1; 
                     self.request_status = RequestStatus::Aborted;                   
                 }
-                else if msg.mtype == message::MessageType::RecoveryDone{
+                else if msg.mtype == MessageType::RecoveryDone{
                     //warn!("in participant, I recovered {} ", self.id_str.clone());
                     break;
                 }
                 //unknown exit 
-                else if msg.mtype == message::MessageType::CoordinatorExit{
+                else if msg.mtype == MessageType::CoordinatorExit{
                     trace!("receive coordinator exit {}", self.id_str.to_owned());
                     self.unknown_ops += 1;
                     break;
+                }
+                else{
+                    continue;
                 }
                 self.log.append(msg.mtype, msg.txid.clone(), String::from(self.id_str.clone()), msg.opid);
                 self.log_index += 1;

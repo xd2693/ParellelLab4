@@ -108,7 +108,7 @@ impl TPCOptions {
                     .short("f")
                     .required(false)
                     .takes_value(true)
-                    .help("Set coordinator fail stage from number 1-7. Range out of 1-7, coordinator won't fail."))
+                    .help("Set coordinator fail stage from number 1-8. Range out of 1-8, coordinator won't fail."))
             .get_matches();
 
         // Parse CLI options and take default values if none given

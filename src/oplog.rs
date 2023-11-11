@@ -87,7 +87,7 @@ impl OpLog {
                 let st = String::from_utf8_lossy(msg.payload());
                 let s = format!("{}",st);
                 let pm = message::ProtocolMessage::from_string(&s);
-                println!("{}", serde_json::to_string(&pm).expect("read wrong"));
+                //println!("{}", serde_json::to_string(&pm).expect("read wrong"));
                 if pm.uid > seqno {
                     seqno = pm.uid;
                 }
