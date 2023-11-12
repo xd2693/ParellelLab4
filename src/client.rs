@@ -10,15 +10,15 @@ use std::thread;
 use std::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::collections::HashMap;
+//use std::collections::HashMap;
 
 use client::ipc_channel::ipc::IpcReceiver as Receiver;
-use client::ipc_channel::ipc::TryRecvError;
+//use client::ipc_channel::ipc::TryRecvError;
 use client::ipc_channel::ipc::IpcSender as Sender;
 
 use message;
-use message::MessageType;
-use message::RequestStatus;
+//use message::MessageType;
+//use message::RequestStatus;
 use message::ProtocolMessage;
 
 // Client state and primitives for communicating with the coordinator
@@ -111,7 +111,7 @@ impl Client {
 
         // Create a new request with a unique TXID.
         self.num_requests = self.num_requests + 1;
-        let mut txid = format!("{}_op_{}", self.id_str.clone(), self.num_requests);
+        let txid = format!("{}_op_{}", self.id_str.clone(), self.num_requests);
         self.txid = txid.clone();
         let pm = message::ProtocolMessage::generate(message::MessageType::ClientRequest,
                                                     txid.clone(),
@@ -181,9 +181,7 @@ impl Client {
     ///
     pub fn report_status(&mut self) {
         // TODO: Collect actual stats
-        let successful_ops: u64 = 0;
-        let failed_ops: u64 = 0;
-        let unknown_ops: u64 = 0;
+        
 
         println!("{:16}:\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}", self.id_str.clone(), self.successful_ops, self.failed_ops, self.unknown_ops);
     }
@@ -200,7 +198,7 @@ impl Client {
         // TODO
         //info!("Sending {} requests", n_requests);
         let timeout_duration = Duration::from_millis(10);
-        for n in 0..n_requests {
+        for _ in 0..n_requests {
             if !self.running.load(Ordering::SeqCst) {
                 //warn!("ctrl c {}", self.id_str);
                 break;
@@ -210,7 +208,7 @@ impl Client {
             thread::sleep(sleep_duration);
             if !self.running.load(Ordering::SeqCst) {
                 self.unknown_ops += 1;
-                //warn!("ctrl c after send {}", self.id_str);
+                
                 break;
             }
             self.recv_result(timeout_duration);

@@ -9,9 +9,9 @@ extern crate ipc_channel;
 
 
 use std::collections::HashMap;
-use std::str::FromStr;
+//use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
+//use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -20,8 +20,8 @@ use std::time::Instant;
 use coordinator::ipc_channel::ipc::IpcSender as Sender;
 use coordinator::ipc_channel::ipc::IpcReceiver as Receiver;
 use coordinator::ipc_channel::ipc::TryRecvError;
-use coordinator::ipc_channel::ipc::channel;
-use coordinator::rand::prelude::*;
+//use coordinator::ipc_channel::ipc::channel;
+//use coordinator::rand::prelude::*;
 
 use message;
 use message::MessageType;
@@ -29,7 +29,7 @@ use message::ProtocolMessage;
 use message::RequestStatus;
 use oplog;
 
-use crate::participant;
+//use crate::participant;
 
 /// CoordinatorState
 /// States for 2PC state machine
@@ -63,7 +63,7 @@ pub struct Coordinator {
     log_index:u32,
     vec_participant_done: Vec<bool>,
     vec_participant_fail: Vec<usize>,
-    heartbeat_tx: Sender<(RequestStatus, String, String, u32)>,
+    //heartbeat_tx: Sender<(RequestStatus, String, String, u32)>,
     fail_stage: u32,
 }
 
@@ -90,7 +90,6 @@ impl Coordinator {
     pub fn new(
         log_path: String,
         r: &Arc<AtomicBool>,
-        heartbeat_tx: Sender<(RequestStatus, String, String, u32)>,
         fail_stage: u32) -> Coordinator {
 
         Coordinator {
@@ -108,7 +107,6 @@ impl Coordinator {
             log_index: 0,
             vec_participant_done: Vec::new(),
             vec_participant_fail: Vec::new(),
-            heartbeat_tx: heartbeat_tx,
             fail_stage: fail_stage,
         }
     }
@@ -172,26 +170,25 @@ impl Coordinator {
         println!("coordinator     :\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}", self.successful_ops, self.failed_ops, self.unknown_ops);
     }
 
-
-
+    /// send ProtocolMessage to all working participants 
     pub fn send_participants(&mut self, msg: message::ProtocolMessage) -> bool{
         for i in 0..self.vec_participant.len(){
             if !self.running.load(Ordering::SeqCst) {
                 return false;
             }
-            let(participant_id, child, participant_tx, participant_rx, pState) = &self.vec_participant[i];
-            //trace!("sending proposal to {}", participant_id);
-            //let msg = ProtocolMessage::generate(message::MessageType::CoordinatorPropose, String::from(txid), String::from(sid), opid);
+            let(_, _, participant_tx, _, pState) = &self.vec_participant[i];
             if *pState{
-                //trace!("sent message to {}", participant_id);
-                //trace!("sending message vec {:?}", self.vec_participant);
-                participant_tx.send( msg.clone());
+                let _ = participant_tx.send( msg.clone());
             }
             
         }
         return true;
     }
 
+    /// receive ProtocolMessage from all participants and return participants vote result
+    /// if any participant alreay fail, return abort result to current transaction
+    /// if any participant timeout, return abort result to current transaction and mark that participant as fail
+    /// coordinator will not send or receive from fail participants until they recovered
     pub fn receive_participants(&mut self, timeout_duration: Duration) ->message::RequestStatus{
         let mut status = message::RequestStatus::Unknown;
         let mut vote = true;
@@ -213,7 +210,7 @@ impl Coordinator {
                 i = (i+1) % self.vec_participant.len();
                 continue;
             }
-            let(participant_id, child, participant_tx, participant_rx, pState) = &self.vec_participant[i];
+            let(_, _, _, participant_rx, pState) = &self.vec_participant[i];
             if !pState{
                 vote = false;
                 participant_done += 1;
@@ -231,16 +228,12 @@ impl Coordinator {
                     start_time = Instant::now();
                 }
                 Err(_) => {
-                    //vote = false;
-                    //warn!("participants {} timeout", i);
-                    //self.vec_participant[i].4 = false;
-                    //self.vec_participant_fail.push(i);
-                    //trace!("adding vec fail {:?}, vec_par {:?}",self.vec_participant_fail, self.vec_participant);
-                    //continue
+                    
                 }
             }
             i = (i+1) % self.vec_participant.len();
         }
+        //mark timeout participants and put them in a vec
         for n in 0..self.vec_participant.len(){
             if self.vec_participant_done[n]{
                 self.vec_participant_done[n] = false;
@@ -262,6 +255,9 @@ impl Coordinator {
         return status;
     }
 
+    /// send recover message to failed participants in the vec
+    /// if participant is ready for recover, send all coordinator global
+    /// decisions that participant missed when failing
     pub fn paricipant_recover(&mut self, timeout_duration: Duration){
         let mut i = self.vec_participant_fail.len()-1;
         //warn!("i={}, vec {:?}",i, self.vec_participant_fail);
@@ -271,9 +267,9 @@ impl Coordinator {
         
         for n in 0..self.vec_participant_fail.len(){
             let p_id = self.vec_participant_fail[n];
-            let(participant_id, child, participant_tx, participant_rx, pState) = &self.vec_participant[p_id];
-            let re_msg = ProtocolMessage::instantiate(::MessageType::ParticipantRecover, 0, String::from("txid"), String::from("sid"), 0);
-            participant_tx.send(re_msg.clone());
+            let(_, _, participant_tx, _, pState) = &self.vec_participant[p_id];
+            let re_msg = ProtocolMessage::instantiate(MessageType::ParticipantRecover, 0, String::from("txid"), String::from("sid"), 0);
+            let _ = participant_tx.send(re_msg.clone());
         }
         let mut start_time = Instant::now();
         loop {
@@ -281,7 +277,7 @@ impl Coordinator {
                 break;
             }
             let p_id = self.vec_participant_fail[i];
-            let(participant_id, child, participant_tx, participant_rx, pState) = &self.vec_participant[p_id];
+            let(_, _, participant_tx, participant_rx, pState) = &self.vec_participant[p_id];
 
             let result = participant_rx.try_recv();
             match result {
@@ -309,17 +305,13 @@ impl Coordinator {
                                 //trace!("CoordinatorAbort {}", pm.txid.clone());
                             }
                             
-                            participant_tx.send(pm.clone());
+                            let _ = participant_tx.send(pm.clone());
                         }
                         let msg = ProtocolMessage::instantiate(message::MessageType::RecoveryDone, 0, String::from("txid"), String::from("sid"), 0);
-                        participant_tx.send(msg);
+                        let _ = participant_tx.send(msg);
                         self.vec_participant[p_id].4 = true;
                         self.vec_participant_fail.remove(i);
-                        //warn!("participant {} recovered", p_id);
                         
-                        //info!("i={}, vec {:?}",i, self.vec_participant_fail);
-                    }else{
-                        //trace!("recover type wrong {}", p_id);
                     }
                         
                 }
@@ -338,11 +330,16 @@ impl Coordinator {
 
             i -= 1;
         }
-        //trace!("fail vec {:?}",self.vec_participant_fail);
+        
     }
 
+    /// coordinator recover from fail
+    /// read last log from coordinator log
+    /// If last log does not contain any message regarding to the current transaction, abort the transaction
+    /// If last log contains a participant ready message, send request to participants again, participants do p2 vote again.
+    /// If last log contains a Coordinator global decision, resend the decision.
     pub fn coordinator_recover(&mut self, txid: String, uid: u32, sid: String, opid: u32, client_index: usize){
-        warn!("in coordinator txid {}", txid.clone().as_str());
+        //warn!("in coordinator txid {}", txid.clone().as_str());
         for n in 0..self.vec_participant.len(){
             let (_, _, _,participant_rx,_) = &self.vec_participant[n];
             let _ = participant_rx.try_recv();
@@ -351,7 +348,7 @@ impl Coordinator {
         let msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorFail, uid, txid.clone(), sid.clone(), opid);
         self.send_participants(msg.clone());
         
-        
+        //coordinator failed before doing anything, just return to Quiescent
         if uid == 0{
             let pm = message::ProtocolMessage::instantiate(MessageType::RecoveryDone, uid, txid.clone(), sid.clone(), opid);
             self.send_participants(pm.clone());
@@ -373,7 +370,7 @@ impl Coordinator {
             self.send_participants(pm.clone());
             pm.mtype = MessageType::ClientResultAbort;
             let (_,_,client_tx,_) = &self.vec_client[client_index];
-            client_tx.send(pm.clone());
+            let _ = client_tx.send(pm.clone());
             self.state = CoordinatorState::SentGlobalDecision;
         }else{
             self.send_participants(last_log.clone());
@@ -382,7 +379,7 @@ impl Coordinator {
                 let (_,_,client_tx,_) = &self.vec_client[client_index];
                 
                 if last_log.senderid == self.vec_client[client_index].0 {
-                    client_tx.send(last_log.clone());
+                    let _ = client_tx.send(last_log.clone());
                     self.state = CoordinatorState::SentGlobalDecision;
                 }else{
                     self.state = CoordinatorState::Quiescent;
@@ -393,7 +390,7 @@ impl Coordinator {
                 let (_,_,client_tx,_) = &self.vec_client[client_index];
                 
                 if last_log.senderid == self.vec_client[client_index].0 {
-                    client_tx.send(last_log.clone());
+                    let _ = client_tx.send(last_log.clone());
                     self.state = CoordinatorState::SentGlobalDecision;
                 }else{
                     self.state = CoordinatorState::Quiescent;
@@ -414,7 +411,7 @@ impl Coordinator {
         for i in 0..self.vec_client.len(){            
             let(_, _, client_tx, _) = &self.vec_client[i];
             
-            client_tx.send( msg.clone());
+            let _= client_tx.send( msg.clone());
         }
     }
 
@@ -446,7 +443,7 @@ impl Coordinator {
             match self.state{
                 CoordinatorState::CoordinatorFail =>{
                     thread::sleep(Duration::from_millis(10));
-                    self.coordinator_recover(txid.clone().to_string(), uid, sid.clone().to_string(), opid, client_index);
+                    self.coordinator_recover(txid.to_string(), uid, sid.to_string(), opid, client_index);
                     
                 }
                 CoordinatorState::Quiescent =>{
@@ -498,7 +495,7 @@ impl Coordinator {
                         fail = false;            
                         continue;
                     }
-                    let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, uid, String::from(txid), String::from(sid), opid);                
+                    let msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, uid, String::from(txid), String::from(sid), opid);                
                     let result = self.send_participants(msg.clone());
                     if !result{
                         //self.unknown_ops += 1;
@@ -540,7 +537,7 @@ impl Coordinator {
                         fail = false;            
                         continue;
                     }
-                    let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorCommit, uid, String::from(txid), String::from(sid), opid);
+                    let msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorCommit, uid, String::from(txid), String::from(sid), opid);
                     let result = self.send_participants(msg.clone());
                     if !result{
                         //self.unknown_ops += 1;
@@ -589,7 +586,7 @@ impl Coordinator {
                     self.send_participants(msg.clone());
                     msg.mtype = message::MessageType::ClientResultCommit;
                     let client_tx = &self.vec_client[client_index].2;
-                    client_tx.send(msg);
+                    let _ = client_tx.send(msg);
                     //trace!("{} commited", &txid);
                     self.state = CoordinatorState::SentGlobalDecision;
                     
@@ -608,7 +605,7 @@ impl Coordinator {
                     self.send_participants(msg.clone());
                     msg.mtype = message::MessageType::ClientResultAbort;
                     let client_tx = &self.vec_client[client_index].2;
-                    client_tx.send(msg);
+                    let _ = client_tx.send(msg);
                     //trace!("{} aborted", &txid);
                     self.state = CoordinatorState::SentGlobalDecision;
                     
@@ -629,10 +626,8 @@ impl Coordinator {
                 }
             }
             
-            //self.heartbeat_tx.send((self.request_status.clone(), String::from(txid), String::from(sid), opid));
-
+            
         }
-        //self.heartbeat_tx.send((self.request_status.clone(), String::from("exit"), String::from(sid), opid));
         self.coordinator_exit();         
         self.report_status();
     }

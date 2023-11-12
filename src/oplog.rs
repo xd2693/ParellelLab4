@@ -39,10 +39,10 @@ impl OpLog {
         let l = HashMap::new();
         let lck = Mutex::new(l);
         let arc = Arc::new(lck);
-        let re= fs::remove_dir_all(fpath.clone());
-        if re.is_err(){
-            print!("delete dir err");
+        if let Ok(_) = fs::metadata(fpath.clone()){
+            let _ = fs::remove_dir_all(fpath.clone());
         }
+
 
         OpLog {
             seqno: 0,

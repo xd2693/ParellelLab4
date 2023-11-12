@@ -133,7 +133,7 @@ impl Participant {
             return true;
         } else {
             // TODO: Send fail
-            //warn!("in participant, {} failed", self.id_str.clone());
+            // Sleep for 20 milliseconds to simulator participant fail
             thread::sleep(Duration::from_millis(20));
             return false;
         }
@@ -151,7 +151,7 @@ impl Participant {
     ///       (it's ok to add parameters or return something other than
     ///       bool if it's more convenient for your design).
     ///
-    pub fn perform_operation(&mut self, request_option: ProtocolMessage) -> bool {
+    pub fn perform_operation(&mut self, _: ProtocolMessage) -> bool {
 
         //trace!("{}::Performing operation", self.id_str.clone());
         let x: f64 = random();
@@ -166,7 +166,7 @@ impl Participant {
         
     }
 
-    ///receive message from coordinator, use try_recv and sleep instead of block
+    /// receive message from coordinator, use try_recv and sleep instead of block
     pub fn receive_message(&mut self, sleep_duration: Duration) -> ProtocolMessage{
         loop{
             if !self.running.load(Ordering::SeqCst) {
@@ -187,6 +187,7 @@ impl Participant {
         }
     }
 
+    /// participant fail recovery
     pub fn recovery_protocol(&mut self, sleep_duration: Duration)->bool{
         
         //get the last line of log before crashing
@@ -223,11 +224,11 @@ impl Participant {
         //send last record in the local log to coordinator
         //receive any missing logs from the coordinator and append to local log
         //wait for the RecoveryDone message to return to normal protocol
-        self.tx.send(pm.clone()).unwrap();
+        let _ = self.tx.send(pm.clone());
         loop{
             let result = self.rx.try_recv();
             if result.is_ok(){        
-                let mut msg = result.unwrap();
+                let msg = result.unwrap();
                 if last_log.mtype == MessageType::CoordinatorCommit || last_log.mtype == MessageType::CoordinatorAbort{
                     last_log.mtype = MessageType::ParticipantRecover;
                     continue;
@@ -268,25 +269,51 @@ impl Participant {
                 
     }
 
+    /// coordinator fail recovery protocol
+    /// When coordinator asks to do p2 vote again, check the log.
+    /// If already voted, resend the vote.
+    /// If not voted, do operation and sent vote.
+    /// When receive global decision from the coordinator, check the log.
+    /// If the decision already logged, return to Quiescent.
+    /// If not logged, log the decision.
     pub fn coordinator_fail(&mut self, sleep_duration: Duration){
             
-        let mut msg = self.receive_message(sleep_duration);
-        let mut last_log = message::ProtocolMessage::instantiate(msg.mtype.clone(), msg.uid, String::from(""), msg.senderid.clone(), msg.opid);
+        let msg = self.receive_message(sleep_duration);
+        let mut last_log = ProtocolMessage::instantiate(msg.mtype.clone(), msg.uid, String::from(""), msg.senderid.clone(), msg.opid);
         
-        warn!("in {}, coordinator fail detected {}", self.id_str, msg.txid.clone().as_str());
+        //warn!("in {}, coordinator fail detected {}", self.id_str, msg.txid.clone().as_str());
         if self.log_index > 0 {
             last_log = self.log.read(&self.log_index);
         }
         
-        let mut mtype = message::MessageType::CoordinatorAbort;
-        if msg.mtype == message::MessageType::CoordinatorExit{
+        let mtype = MessageType::CoordinatorAbort;
+        if msg.mtype == MessageType::CoordinatorExit{
             trace!("receive coordinator exit {}", self.id_str.to_owned());
             self.unknown_ops += 1;
             
-        }    
-        if msg.mtype == MessageType::RecoveryDone {
+        }
+            
+        if msg.mtype == MessageType::RecoveryDone{
             self.state = ParticipantState::Quiescent;
             
+        }
+        else if msg.mtype == MessageType::ParticipantReady{
+            if last_log.mtype == MessageType::ParticipantVoteCommit || last_log.mtype == MessageType::ParticipantVoteAbort{
+                let _ = self.tx.send(last_log);
+                self.state = ParticipantState::AwaitingGlobalDecision;
+            }else if last_log.mtype == MessageType::ParticipantReady {
+                let op = self.perform_operation(msg.clone());                        
+                if !op {
+                    //my_msg.mtype = MessageType::ParticipantVoteAbort;
+                    self.state = ParticipantState::VotedAbort;
+                    self.log.append(MessageType::ParticipantVoteAbort, msg.txid.clone(), last_log.senderid.clone(), msg.opid);
+                    self.log_index += 1;
+                }else{
+                    self.state = ParticipantState::VotedP2Commit;
+                    self.log.append(MessageType::ParticipantVoteCommit, msg.txid.clone(), last_log.senderid.clone(), msg.opid); 
+                    self.log_index += 1;
+                }
+            }
         }
         else {
             if last_log.txid == msg.txid && last_log.mtype == msg.mtype{
@@ -295,16 +322,16 @@ impl Participant {
             }else{
                 self.log.append(msg.mtype, msg.txid, self.id_str.clone(), msg.opid);
                 self.log_index += 1;
-                if msg.mtype == message::MessageType::CoordinatorAbort{
+                if msg.mtype == MessageType::CoordinatorAbort{
                     self.failed_ops += 1;
-                }else if msg.mtype == message::MessageType::CoordinatorCommit{
+                }else if msg.mtype == MessageType::CoordinatorCommit{
                     self.successful_ops += 1;
                 }
                 self.state = ParticipantState::Quiescent;
                 
             }
         }
-        warn!("coordinator recovered in participant {}", self.id_str);
+        //warn!("coordinator recovered in participant {}", self.id_str);
     }
 
     ///
@@ -314,9 +341,7 @@ impl Participant {
     ///
     pub fn report_status(&mut self) {
         // TODO: Collect actual stats
-        let successful_ops: u64 = 0;
-        let failed_ops: u64 = 0;
-        let unknown_ops: u64 = 0;
+
 
         println!("{:16}:\tCommitted: {:6}\tAborted: {:6}\tUnknown: {:6}", self.id_str.clone(), self.successful_ops, self.failed_ops, self.unknown_ops);
     }
@@ -348,18 +373,15 @@ impl Participant {
     /// HINT: Wait for some kind of exit signal before returning from the protocol!
     ///
     pub fn protocol(&mut self) {
-        //trace!("{}::Beginning protocol", self.id_str.clone());
-        //let mut phase1 = false;
-        //let mut phase2 = false;
+
         let sleep_duration = Duration::from_millis(1);
         let op_sleep_duration = Duration::from_millis(3);
         let mut txid= String::from("") ;
         let mut uid = 0;
         let binding = self.id_str.clone();
-        let mut sid = binding.as_str();
+        let sid = binding.as_str();
         let mut opid = 0;
-        let mut result : Result<ProtocolMessage, TryRecvError> ;
-        let mut msg : message::ProtocolMessage ;
+        let mut msg : ProtocolMessage ;
         // TODO
         loop {
             if !self.running.load(Ordering::SeqCst) {
@@ -374,7 +396,7 @@ impl Participant {
                 }
                 ParticipantState::Quiescent => {
                     msg = self.receive_message(sleep_duration);
-                    if msg.mtype == message::MessageType::CoordinatorPropose{
+                    if msg.mtype == MessageType::CoordinatorPropose{
                         //trace!("{} received proposal", self.id_str.clone());
                         
                         txid = msg.txid.clone();
@@ -383,38 +405,38 @@ impl Participant {
                         self.state = ParticipantState::ReceivedP1;
                         self.request_status = RequestStatus::Unknown;
                         
-                    }else if msg.mtype == message::MessageType::CoordinatorExit {
+                    }else if msg.mtype == MessageType::CoordinatorExit {
                         trace!("receive coordinator exit {}", self.id_str.to_owned());
                         break;
-                    }else if msg.mtype == message::MessageType::CoordinatorFail{
+                    }else if msg.mtype == MessageType::CoordinatorFail{
                         self.coordinator_fail(sleep_duration);
                     }
                     
                     
                 }
                 ParticipantState::ReceivedP1 =>{
-                    msg = message::ProtocolMessage::instantiate(message::MessageType::CoordinatorPropose, 
-                                                                                    uid,
-                                                                                    txid.clone(), 
-                                                                                    String::from(sid), 
-                                                                                    opid);
+                    msg = ProtocolMessage::instantiate(MessageType::CoordinatorPropose, 
+                                                      uid,
+                                                    txid.clone(), 
+                                                    String::from(sid), 
+                                                    opid);
                     let op = self.perform_operation(msg.clone());
                     
                     if !op {
-                        //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
+                        //my_msg.mtype = MessageType::ParticipantVoteAbort;
                         self.state = ParticipantState::VotedAbort;
-                        self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                        self.log.append(MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
                         self.log_index += 1;
                     }else{
                         self.state = ParticipantState::VotedP1Commit;
-                        self.log.append(message::MessageType::ParticipantReady, txid.clone(), String::from(sid), opid);
+                        self.log.append(MessageType::ParticipantReady, txid.clone(), String::from(sid), opid);
                         self.log_index += 1;
                     }                                                          
                     
                     
                 }
                 ParticipantState::VotedP1Commit =>{
-                    let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteCommit, 
+                    let my_msg = message::ProtocolMessage::instantiate(MessageType::ParticipantVoteCommit, 
                                                                                         uid,
                                                                                         txid.clone(), 
                                                                                         String::from(sid), 
@@ -429,26 +451,23 @@ impl Participant {
                 ParticipantState::SentP1Commit =>{
                     msg = self.receive_message(sleep_duration);
                     //phase 1 committed
-                    if msg.mtype == message::MessageType::CoordinatorCommit{
-                        //trace!("{} received commit, start phase 2", self.id_str.clone());
+                    if msg.mtype == MessageType::CoordinatorCommit{
                         let op = self.perform_operation(msg.clone());
                         
                         if !op {
-                            //my_msg.mtype = message::MessageType::ParticipantVoteAbort;
                             self.state = ParticipantState::VotedAbort;
-                            self.log.append(message::MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
+                            self.log.append(MessageType::ParticipantVoteAbort, txid.clone(), String::from(sid), opid);
                             self.log_index += 1;
                         }else{
                             self.state = ParticipantState::VotedP2Commit;
-                            self.log.append(message::MessageType::ParticipantVoteCommit, txid.clone(), String::from(sid), opid); 
+                            self.log.append(MessageType::ParticipantVoteCommit, txid.clone(), String::from(sid), opid); 
                             self.log_index += 1;
                         }                      
                     }
                     //phase 1 aborted
-                    else if msg.mtype == message::MessageType::CoordinatorAbort{
-                        //trace!("{} received abort in phase 1", self.id_str.clone());
+                    else if msg.mtype == MessageType::CoordinatorAbort{
                         self.failed_ops += 1;
-                        let mtype = message::MessageType::CoordinatorAbort;
+                        let mtype = MessageType::CoordinatorAbort;
                         self.log.append(mtype, txid.clone(), String::from(sid), opid);
                         self.log_index += 1;
                         self.request_status = RequestStatus::Aborted;
@@ -456,19 +475,19 @@ impl Participant {
                         continue;
                     }
                     //unknown exit
-                    else if msg.mtype == message::MessageType::CoordinatorExit{
+                    else if msg.mtype == MessageType::CoordinatorExit{
                         trace!("receive coordinator exit {}", self.id_str.to_owned());
                         self.unknown_ops += 1;
                         break;
                     }
-                    else if msg.mtype == message::MessageType::CoordinatorFail{
+                    else if msg.mtype == MessageType::CoordinatorFail{
                         self.coordinator_fail(sleep_duration);
                     }
                     
                     
                 }
                 ParticipantState::VotedP2Commit =>{
-                    let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteCommit, 
+                    let my_msg = message::ProtocolMessage::instantiate(MessageType::ParticipantVoteCommit, 
                                                                                         uid,
                                                                                         txid.clone(), 
                                                                                         String::from(sid), 
@@ -484,24 +503,22 @@ impl Participant {
                 ParticipantState::AwaitingGlobalDecision =>{
                     msg = self.receive_message(sleep_duration);
                     //phase 2 committed
-                    if msg.mtype == message::MessageType::CoordinatorCommit{
-                        //trace!("{} received result commit", self.id_str.clone());
+                    if msg.mtype == MessageType::CoordinatorCommit{
                         self.successful_ops += 1;
                         self.request_status = RequestStatus::Committed;
                     }
                     //phase 2 aborted
-                    else if msg.mtype == message::MessageType::CoordinatorAbort{
-                        //trace!("{} received result abort", self.id_str.clone());
+                    else if msg.mtype == MessageType::CoordinatorAbort{
                         self.failed_ops += 1; 
                         self.request_status = RequestStatus::Aborted;                   
                     }
                     //unknown exit 
-                    else if msg.mtype == message::MessageType::CoordinatorExit{
+                    else if msg.mtype == MessageType::CoordinatorExit{
                         trace!("receive coordinator exit {}", self.id_str.to_owned());
                         self.unknown_ops += 1;
                         break;
                     }
-                    else if msg.mtype == message::MessageType::CoordinatorFail{
+                    else if msg.mtype == MessageType::CoordinatorFail{
                         self.coordinator_fail(sleep_duration);
                         continue;
                     }
@@ -511,7 +528,7 @@ impl Participant {
                     
                 }
                 ParticipantState::VotedAbort =>{
-                    let my_msg = message::ProtocolMessage::instantiate(message::MessageType::ParticipantVoteAbort, 
+                    let my_msg = message::ProtocolMessage::instantiate(MessageType::ParticipantVoteAbort, 
                                                                                         uid,
                                                                                         txid.clone(), 
                                                                                         String::from(sid), 

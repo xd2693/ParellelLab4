@@ -6,7 +6,7 @@ extern crate ctrlc;
 extern crate ipc_channel;
 use std::env;
 use std::fs;
-use std::string;
+//use std::string;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::{Child,Command};
@@ -23,10 +23,10 @@ pub mod client;
 pub mod checker;
 pub mod tpcoptions;
 use message::ProtocolMessage;
-use message::RequestStatus;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+//use message::RequestStatus;
+//use std::thread;
+//use std::time::Duration;
+//use std::time::Instant;
 
 
 use crate::participant::Participant;
@@ -64,10 +64,6 @@ fn spawn_child_and_connect(child_opts: &mut tpcoptions::TPCOptions, pside_name_r
     let pside_sender_tx = Sender::connect(pside_sender_tx_name).unwrap();
     pside_sender_tx.send(tx).unwrap();
     let (_, tx) : (_, Sender<ProtocolMessage>) = pside_sender_rx.accept().unwrap();
-    //let msg = ProtocolMessage::generate(message::MessageType::CoordinatorCommit, String::from("parent"), String::from("failed"), child_opts.num.clone());
-    //tx.send(msg).unwrap();
-    //let result : ProtocolMessage = rx.recv().unwrap();
-    //warn!("Parent received protocol {:?}_{}_{}_{}", result.mtype.clone(), result.txid.clone(), result.senderid.clone(), result.opid.clone());
     (child, tx, rx)
 }
 
@@ -97,11 +93,6 @@ fn connect_to_coordinator(opts: &tpcoptions::TPCOptions) -> (Sender<ProtocolMess
     let cside_sender_tx = Sender::connect(cside_sender_tx_name).unwrap();
     cside_sender_tx.send(tx).unwrap();
     let(_, tx) : (_, Sender<ProtocolMessage>) = cside_sender_rx.accept().unwrap();
-    //let msg = ProtocolMessage::generate(message::MessageType::ClientRequest, opts.mode.clone(), String::from("sent"), opts.num.clone());
-    //tx.send(msg).unwrap();
-    //let result : ProtocolMessage = rx.recv().unwrap();
-    //warn!("{}_{} received protocol {:?}_{}_{}_{}", opts.mode.clone(), opts.num.clone(), result.mtype.clone(), 
-    //                                          result.txid.clone(), result.senderid.clone(), result.opid.clone());
     (tx, rx)
 }
 
@@ -123,23 +114,18 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let coord_log_path = format!("{}//{}", opts.log_path, "coordinator.log");
 
     // TODO
-    let (heartbeat_tx, heartbeat_rx) = channel().unwrap();
-    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running, heartbeat_tx, opts.coordinator_fail_stage);
+
+    let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running, opts.coordinator_fail_stage);
     //info!("Created IPC {coord_log_path}");
-    //let mut vec_participant: Vec<Sender<ProtocolMessage>>= Vec::new();
-    //let mut vec_client: Vec<Sender<ProtocolMessage>>= Vec::new();
     let mut cCount = 0;
     let mut optsClient = opts.clone();
     optsClient.mode = String::from("client");
-    for n in 0..opts.num_clients {
+    for _ in 0..opts.num_clients {
         optsClient.num = cCount;
         let (pside_name_rx, pside_name_rx_name) = IpcOneShotServer::new().unwrap();
         optsClient.ipc_path = pside_name_rx_name.clone();
-        //info!("One shot server name {}", pside_name_rx_name.clone());
-        //let (child, sender, receiver) = spawn_child_and_connect(&mut optsClient, pside_name_rx);  
         let client = spawn_child_and_connect(&mut optsClient, pside_name_rx);
         let client_id_str = format!("client_{}", cCount);
-        //vec_client.push(client.1.clone());
         coordinator.client_join(&client_id_str, client);
         cCount += 1;
     }
@@ -148,90 +134,22 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let mut pCount = 0;
     let mut optsParticipant = opts.clone();
     optsParticipant.mode = String::from("participant");
-    for n in 0..opts.num_participants {
+    for _ in 0..opts.num_participants {
         optsParticipant.num = pCount;
         let (pside_name_rx, pside_name_rx_name) = IpcOneShotServer::new().unwrap();
         optsParticipant.ipc_path = pside_name_rx_name.clone();
-        //info!("One shot server name {}", pside_name_rx_name.clone());
-        //let (child, sender, receiver) = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
         let participant = spawn_child_and_connect(&mut optsParticipant, pside_name_rx);
         let participant_id_str = format!("participant_{}", pCount);
-        //vec_participant.push(participant.1.clone());
         coordinator.participant_join(&participant_id_str, participant);
 
         pCount += 1;
 
     }
     
-    //info!("Created {} participants", optsParticipant.num_participants);
-    
-    
-    
-    //thread::spawn(move|| heartbeat_checker(heartbeat_rx, vec_participant, vec_client, coord_log_path, running));
-    
-    coordinator.protocol();
+        coordinator.protocol();
 }
 
-fn heartbeat_checker(rx: Receiver<(RequestStatus, String, String, u32)>, vec_participant: Vec<Sender<ProtocolMessage>>, vec_client: Vec<Sender<ProtocolMessage>>, coord_log_path: String, running: Arc<AtomicBool>){
-    let mut state: message::RequestStatus= message::RequestStatus::Unknown;
-    let mut txid: String = String::from("");
-    let mut sid : String = String::from("");
-    let mut uid : u32 = 0;
-    let mut oid: u32 = 0;
-    let timeout_duration = Duration::from_millis(600);
-    let mut start_time = Instant::now();
-    let mut isFail = false;
-    
-    loop{
-        if !running.load(Ordering::SeqCst) {
-            break;
-        }
-        let re = rx.try_recv();
-        match re {
-            Ok((st, tid, senderid, opid)) =>{
-                
-                state = st;
-                txid = tid;
-                sid = senderid;
-                oid = opid;
-                start_time = Instant::now();
-                isFail = false;
-            }
-            Err(_) =>{
-                thread::sleep(Duration::from_millis(5));
-            }
-            
-        }
-        if txid.as_str() =="exit"{
-            break;
-        }
-        if Instant::now().duration_since(start_time) >= timeout_duration && !isFail{
-            isFail = true;
-            match state{
-                message::RequestStatus::Committed =>{
-                    uid = 1;
-                }
-                message::RequestStatus::Aborted =>{
-                    uid = 2;
-                }
-                message::RequestStatus::Unknown =>{
-                    uid = 3;
-                    
-                }
-            }
-            let msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorFail, uid, txid.clone(), sid.clone(), oid);
-            //println!("coordinator fail! {} - {}", txid.clone().as_str(), uid);
-            for tx in &vec_participant{
-                tx.send(msg.clone());
-            }
-            for tx in &vec_client{
-                tx.send(msg.clone());
-            }
-            //In reality, do something to bring back coordinator. (wait for coordinator to recover in this test case)
-            thread::sleep(Duration::from_millis(200));
-        }
-    }
-}
+
 
 ///
 /// pub fn run_client(opts: &tpcoptions:TPCOptions, running: Arc<AtomicBool>)
@@ -246,7 +164,6 @@ fn heartbeat_checker(rx: Receiver<(RequestStatus, String, String, u32)>, vec_par
 fn run_client(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     // TODO
     let client_id_str = format!("client_{}", opts.num);
-    //let client_log_path = format!("{}//{}", opts.log_path, client_id_str);
     
     let (sender, receiver) = connect_to_coordinator(opts);
     let mut client = Client::new(client_id_str, running, sender, receiver);
@@ -269,7 +186,6 @@ fn run_participant(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
 
     // TODO
     
-    //println!("Created {} participant", opts.num);
     let (sender, receiver) = connect_to_coordinator(opts);
     let mut participant = Participant::new(participant_id_str, participant_log_path, running.clone(), opts.send_success_probability, opts.operation_success_probability, sender, receiver);
     participant.protocol();
