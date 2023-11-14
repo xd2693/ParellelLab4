@@ -39,11 +39,7 @@ impl OpLog {
         let l = HashMap::new();
         let lck = Mutex::new(l);
         let arc = Arc::new(lck);
-        if let Ok(_) = fs::metadata(fpath.clone()){
-            let _ = fs::remove_dir_all(fpath.clone());
-        }
-
-
+        
         OpLog {
             seqno: 0,
             log_arc: arc,
