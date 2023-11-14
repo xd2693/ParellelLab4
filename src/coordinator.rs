@@ -425,8 +425,8 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let timeout_duration = Duration::from_millis(self.vec_participant.len()*2 as u64);
-        let client_timeout = Duration::from_millis((self.vec_client*self.vec_participant+50) as u64);
+        let timeout_duration = Duration::from_millis(self.vec_participant.len()*2).try_into().unwrap();
+        let client_timeout = Duration::from_millis(self.vec_client*self.vec_participant+50).try_into().unwrap();
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
