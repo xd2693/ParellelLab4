@@ -114,9 +114,7 @@ fn run(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let coord_log_path = format!("{}//{}", opts.log_path, "coordinator.log");
 
     // TODO
-    if let Ok(_) = fs::metadata(opts.log_path.clone()){
-        let _ = fs::remove_dir_all(opts.log_path.clone());
-    }
+
     let mut coordinator = coordinator::Coordinator::new(coord_log_path.clone(), &running, opts.coordinator_fail_stage);
     //info!("Created IPC {coord_log_path}");
     let mut cCount = 0;
@@ -168,7 +166,7 @@ fn run_client(opts: & tpcoptions::TPCOptions, running: Arc<AtomicBool>) {
     let client_id_str = format!("client_{}", opts.num);
     
     let (sender, receiver) = connect_to_coordinator(opts);
-    let mut client = Client::new(client_id_str, running, sender, receiver, opts.);
+    let mut client = Client::new(client_id_str, running, sender, receiver);
     client.protocol(opts.num_requests);
 }
 

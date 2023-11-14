@@ -33,7 +33,6 @@ pub struct Client {
     pub failed_ops: u64,
     pub unknown_ops: u64,
     pub txid : String,
-    pub timeout: u32,
 }
 
 ///
@@ -60,8 +59,7 @@ impl Client {
     pub fn new(id_str: String,
                running: Arc<AtomicBool>,
                tx: Sender<ProtocolMessage>,
-               rx: Receiver<ProtocolMessage>,
-               timeout: u32) -> Client {
+               rx: Receiver<ProtocolMessage>) -> Client {
         Client {
             id_str: id_str,
             running: running,
@@ -73,7 +71,6 @@ impl Client {
             failed_ops: 0,
             unknown_ops: 0,
             txid: String::from(""),
-            timeout: timeout,
         }
     }
 
@@ -200,14 +197,14 @@ impl Client {
 
         // TODO
         //info!("Sending {} requests", n_requests);
-        let timeout_duration = Duration::from_millis(20);
+        let timeout_duration = Duration::from_millis(10);
         for _ in 0..n_requests {
             if !self.running.load(Ordering::SeqCst) {
                 //warn!("ctrl c {}", self.id_str);
                 break;
             }
             self.send_next_operation();
-            let sleep_duration = Duration::from_millis(self.timeout);
+            let sleep_duration = Duration::from_millis(10);
             thread::sleep(sleep_duration);
             if !self.running.load(Ordering::SeqCst) {
                 self.unknown_ops += 1;

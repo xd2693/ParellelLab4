@@ -374,8 +374,8 @@ impl Participant {
     ///
     pub fn protocol(&mut self) {
 
-        let sleep_duration = Duration::from_millis(2);
-        let op_sleep_duration = Duration::from_millis(10);
+        let sleep_duration = Duration::from_millis(1);
+        let op_sleep_duration = Duration::from_millis(3);
         let mut txid= String::from("") ;
         let mut uid = 0;
         let binding = self.id_str.clone();

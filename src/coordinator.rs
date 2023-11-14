@@ -424,7 +424,7 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let timeout_duration = Duration::from_millis(120);
+        let timeout_duration = Duration::from_millis(30);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
