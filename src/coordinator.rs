@@ -427,8 +427,8 @@ impl Coordinator {
         // TODO
         let num_client: u64 = self.vec_client.len()as u64;
         let num_participant: u64 = self.vec_participant.len() as u64;
-        let timeout_duration = Duration::from_millis(num_client*2);
-        let client_timeout = Duration::from_millis(num_client*num_participant+50);
+        let timeout_duration = Duration::from_millis(num_participant*2);
+        let client_timeout = Duration::from_millis(num_client*num_participant/2+200);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
@@ -468,9 +468,18 @@ impl Coordinator {
                         client_done += 1;
                         continue;
                     }
-                    let client_rx = &self.vec_client[client_index].3;
                     
-                    result = client_rx.try_recv_timeout(client_timeout);
+                    let mut start_time = Instant::now();
+                    loop {
+                        if Instant::now().duration_since(start_time) >= timeout_duration{
+                            break;
+                        }
+                        let client_rx = &self.vec_client[client_index].3;
+                        result = client_rx.try_recv
+                        _timeout(client_timeout);
+                    }
+
+                    
                     if result.is_err(){
                         self.vec_client_done[client_index] = true;
                         //trace!("client {} timeout", client_index.to_string());

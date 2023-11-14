@@ -207,7 +207,8 @@ impl Client {
                 break;
             }
             self.send_next_operation();
-            let sleep_duration = Duration::from_millis(self.timeout);
+            let sleep_duration = Duration::from_millis(self.timeout/2);
+            warn!("client {}", self.timeout);
             thread::sleep(sleep_duration);
             if !self.running.load(Ordering::SeqCst) {
                 self.unknown_ops += 1;
