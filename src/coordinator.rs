@@ -425,7 +425,7 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let num_client: u64 = self.vec_client.len()as u64;
+        let num_client: u64 = self.vec_client.len();
         let num_participant: u64 = self.vec_participant.len() as u64;
         let timeout_duration = Duration::from_millis(num_client*2);
         let client_timeout = Duration::from_millis(num_client*num_participant+50);

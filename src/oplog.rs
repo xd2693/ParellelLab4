@@ -25,8 +25,8 @@ pub struct OpLog {
     seqno: u32,
     log_arc: Arc<Mutex<HashMap<u32, message::ProtocolMessage>>>,
     path: String,
-    //lf: File,
-    lf: CommitLog,
+    lf: File,
+    //lf: CommitLog,
 }
 
 impl OpLog {
@@ -44,8 +44,8 @@ impl OpLog {
             seqno: 0,
             log_arc: arc,
             path: fpath.to_string(),
-            //lf: File::create(fpath).unwrap(),
-            lf: CommitLog::new(LogOptions::new(fpath)).unwrap(),
+            lf: File::create(fpath).unwrap(),
+            //lf: CommitLog::new(LogOptions::new(fpath)).unwrap(),
         }
     }
 
@@ -58,11 +58,11 @@ impl OpLog {
         let mut seqno = 0;
         let mut l = HashMap::new();
         let scopy = fpath.clone();
-        //let tlf = File::open(fpath).unwrap();
-        let tlf = CommitLog::new(LogOptions::new(fpath)).unwrap();
-        //let mut reader = BufReader::new(&tlf);
+        let tlf = File::open(fpath).unwrap();
+        //let tlf = CommitLog::new(LogOptions::new(fpath)).unwrap();
+        let mut reader = BufReader::new(&tlf);
         
-        /*let mut line = String::new();
+        let mut line = String::new();
         let mut len = reader.read_line(&mut line).unwrap();
         while len > 0 {
             let pm = message::ProtocolMessage::from_string(&line);
@@ -72,8 +72,8 @@ impl OpLog {
             l.insert(pm.uid, pm);
             line.clear();
             len = reader.read_line(&mut line).unwrap();
-        }*/
-        let last = tlf.last_offset().unwrap();
+        }
+        /*let last = tlf.last_offset().unwrap();
         
         let mut offsets =0;
         
@@ -90,7 +90,7 @@ impl OpLog {
                 l.insert(pm.uid, pm);
                 offsets += 1;
             }
-        }
+        }*/
         
         let lck = Mutex::new(l);
         let arc = Arc::new(lck);
@@ -113,9 +113,9 @@ impl OpLog {
         self.seqno += 1;
         let id = self.seqno;
         let pm = message::ProtocolMessage::generate(t, tid, sender, op);
-        //serde_json::to_writer(&mut self.lf, &pm).unwrap();
-        self.lf.append_msg(serde_json::to_string(&pm).expect("")).unwrap();
-        //writeln!(&mut self.lf).unwrap();
+        serde_json::to_writer(&mut self.lf, &pm).unwrap();
+        //self.lf.append_msg(serde_json::to_string(&pm).expect("")).unwrap();
+        writeln!(&mut self.lf).unwrap();
         self.lf.flush().unwrap();
         log.insert(id, pm);
     }
