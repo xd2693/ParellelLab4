@@ -62,7 +62,6 @@ pub struct Participant {
     unknown_ops: u64,
     request_status: RequestStatus,
     log_index : u32,
-    timeout : u32,
 }
 
 ///
@@ -94,8 +93,7 @@ impl Participant {
         send_success_prob: f64,
         operation_success_prob: f64,
         tx: Sender<ProtocolMessage>,
-        rx: Receiver<ProtocolMessage>,
-        timeout: u32,) -> Participant {
+        rx: Receiver<ProtocolMessage>) -> Participant {
 
         Participant {
             id_str: id_str,
@@ -112,7 +110,6 @@ impl Participant {
             unknown_ops: 0,
             request_status: RequestStatus::Committed,
             log_index: 0,
-            timeout: timeout,
         }
     }
 
@@ -378,7 +375,7 @@ impl Participant {
     pub fn protocol(&mut self) {
 
         let sleep_duration = Duration::from_millis(2);
-        let op_sleep_duration = Duration::from_millis(timeout);
+        let op_sleep_duration = Duration::from_millis(10);
         let mut txid= String::from("") ;
         let mut uid = 0;
         let binding = self.id_str.clone();
