@@ -427,8 +427,8 @@ impl Coordinator {
         // TODO
         let num_client: u64 = self.vec_client.len()as u64;
         let num_participant: u64 = self.vec_participant.len() as u64;
-        let timeout_duration = Duration::from_millis(num_participant*2);
-        let client_timeout = Duration::from_millis(num_client*num_participant/2+200);
+        let participant_timeout = Duration::from_millis(num_participant*2);
+        let client_timeout = Duration::from_millis(num_client*num_participant+200);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
@@ -439,9 +439,9 @@ impl Coordinator {
         let mut client_pm : message::ProtocolMessage ;
         let mut fail = true;
         
-        loop {
+        'outer: loop {
             if !self.running.load(Ordering::SeqCst) {
-                break;
+                break 'outer;
             }
             
             match self.state{
@@ -459,44 +459,44 @@ impl Coordinator {
                         continue;
                     }
                     if self.vec_participant_fail.len() > 0{
-                        self.paricipant_recover(timeout_duration);
+                        self.paricipant_recover(participant_timeout);
                     }
-                    if client_done == self.vec_client.len(){
-                        break;
-                    }
-                    if self.vec_client_done[client_index]{
-                        client_done += 1;
-                        continue;
-                    }
+                    // if client_done == self.vec_client.len(){
+                    //     break;
+                    // }
+                    // if self.vec_client_done[client_index]{
+                    //     client_done += 1;
+                    //     continue;
+                    // }
                     
-                    let mut start_time = Instant::now();
-                    loop {
-                        if Instant::now().duration_since(start_time) >= timeout_duration{
-                            break;
+                    let start_time = Instant::now();
+                    'client_read: loop {
+                        if Instant::now().duration_since(start_time) >= client_timeout{
+                            error!("Coordinator client timeout");
+                            break 'outer;
                         }
                         let client_rx = &self.vec_client[client_index].3;
-                        result = client_rx.try_recv
-                        _timeout(client_timeout);
+                        result = client_rx.try_recv();
+                        if result.is_err(){
+                            //self.vec_client_done[client_index] = true;
+                            //trace!("client {} timeout", client_index.to_string());
+                            client_index = (client_index + 1)%(self.vec_client.len());
+                        }else{
+                            client_pm = result.unwrap();
+                            txid = client_pm.txid.as_str();
+                            sid = client_pm.senderid.as_str();
+                            opid = client_pm.opid;
+                            uid = client_pm.uid;
+                            //trace!("client request received {}", &txid);
+                            
+                            self.request_status = RequestStatus::Unknown;
+                            self.state = CoordinatorState::ReceivedRequest;
+                            break 'client_read;
+                        }
                     }
 
                     
-                    if result.is_err(){
-                        self.vec_client_done[client_index] = true;
-                        //trace!("client {} timeout", client_index.to_string());
-                        client_index = (client_index + 1)%(self.vec_client.len());
-                        
-                    }else{
-                        client_pm = result.unwrap();
-                        txid = client_pm.txid.as_str();
-                        sid = client_pm.senderid.as_str();
-                        opid = client_pm.opid;
-                        uid = client_pm.uid;
-                        //trace!("client request received {}", &txid);
-                        
-                        self.request_status = RequestStatus::Unknown;
-                        self.state = CoordinatorState::ReceivedRequest;
-                        
-                    }
+                   
                     
                     
                 }
@@ -526,7 +526,7 @@ impl Coordinator {
                         fail = false;            
                         continue;
                     }
-                    let result = self.receive_participants(timeout_duration);
+                    let result = self.receive_participants(participant_timeout);
                     /*if result == message::RequestStatus::Unknown {
                         //self.unknown_ops += 1;
                         break;
@@ -570,7 +570,7 @@ impl Coordinator {
                         fail = false;            
                         continue;
                     }
-                    let result = self.receive_participants(timeout_duration);
+                    let result = self.receive_participants(participant_timeout);
                     if result == message::RequestStatus::Unknown {
                         //self.unknown_ops += 1;
                         break;

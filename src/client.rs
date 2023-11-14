@@ -200,7 +200,7 @@ impl Client {
 
         // TODO
         //info!("Sending {} requests", n_requests);
-        let timeout_duration = Duration::from_millis(20);
+        let timeout_duration = Duration::from_millis(10);
         for _ in 0..n_requests {
             if !self.running.load(Ordering::SeqCst) {
                 //warn!("ctrl c {}", self.id_str);
@@ -208,7 +208,7 @@ impl Client {
             }
             self.send_next_operation();
             let sleep_duration = Duration::from_millis(self.timeout/2);
-            warn!("client {}", self.timeout);
+            //warn!("client {}", self.timeout);
             thread::sleep(sleep_duration);
             if !self.running.load(Ordering::SeqCst) {
                 self.unknown_ops += 1;
