@@ -426,7 +426,7 @@ impl Coordinator {
 
         // TODO
         let num_client: u64 = self.vec_client.len();
-        let num_participant: u64 = self.vec_participant.len();
+        let num_participant: u64 = self.vec_participant.len() as u64;
         let timeout_duration = Duration::from_millis(num_client*2);
         let client_timeout = Duration::from_millis(num_client*num_participant+50);
         let mut client_done = 0;
