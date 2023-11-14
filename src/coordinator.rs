@@ -424,7 +424,8 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let timeout_duration = Duration::from_millis(120);
+        let timeout_duration = Duration::from_millis(self.vec_participant.len()*2);
+        let client_timeout = Duration::from_millis(self.vec_client*self.vec_participant+50);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;
@@ -466,7 +467,7 @@ impl Coordinator {
                     }
                     let client_rx = &self.vec_client[client_index].3;
                     
-                    result = client_rx.try_recv_timeout(Duration::from_millis(20));
+                    result = client_rx.try_recv_timeout(client_timeout);
                     if result.is_err(){
                         self.vec_client_done[client_index] = true;
                         //trace!("client {} timeout", client_index.to_string());
