@@ -9,7 +9,6 @@ extern crate ipc_channel;
 
 
 use std::collections::HashMap;
-use std::convert::TryInto;
 //use std::str::FromStr;
 use std::sync::Arc;
 //use std::sync::Mutex;
@@ -425,8 +424,8 @@ impl Coordinator {
     pub fn protocol(&mut self) {
 
         // TODO
-        let timeout_duration = Duration::from_millis(self.vec_participant.len()*2).try_into().unwrap();
-        let client_timeout = Duration::from_millis(self.vec_client*self.vec_participant+50).try_into().unwrap();
+        let timeout_duration = Duration::from_millis(self.vec_participant.len()*2);
+        let client_timeout = Duration::from_millis(self.vec_client*self.vec_participant+50);
         let mut client_done = 0;
         let mut txid = "";
         let mut uid = 0;

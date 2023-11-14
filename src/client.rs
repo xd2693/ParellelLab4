@@ -33,7 +33,7 @@ pub struct Client {
     pub failed_ops: u64,
     pub unknown_ops: u64,
     pub txid : String,
-    pub timeout: u64,
+    pub timeout: u32,
 }
 
 ///
@@ -61,7 +61,7 @@ impl Client {
                running: Arc<AtomicBool>,
                tx: Sender<ProtocolMessage>,
                rx: Receiver<ProtocolMessage>,
-               timeout: u64) -> Client {
+               timeout: u32) -> Client {
         Client {
             id_str: id_str,
             running: running,
