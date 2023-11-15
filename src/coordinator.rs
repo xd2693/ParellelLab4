@@ -397,7 +397,7 @@ impl Coordinator {
                     self.state = CoordinatorState::Quiescent;
                 }
             }else if last_log.mtype == MessageType::ParticipantReady{
-                self.send_participants(last_log.clone());
+                // self.send_participants(last_log.clone());
                 self.state = CoordinatorState::SentP1Commit;
             }
         }
@@ -536,11 +536,15 @@ impl Coordinator {
                         self.state = CoordinatorState::ReceivedVotesAbort;
                         self.request_status = RequestStatus::Aborted;
                         self.failed_ops += 1; 
+                        self.log.append(message::MessageType::CoordinatorAbort, String::from(txid), String::from(sid), opid);
+                        self.log_index += 1;
                         continue;
                     }
+                    
+                    self.log.append(message::MessageType::ParticipantReady, String::from(txid), String::from(sid), opid);
+                    self.log_index += 1;
                     self.state = CoordinatorState::ReceivedP1VotesCommit;
-                    
-                    
+                     
                 }
                 CoordinatorState::ReceivedP1VotesCommit =>{
                     //trace!("ReceivedP1VotesCommit");
@@ -556,8 +560,7 @@ impl Coordinator {
                         //self.unknown_ops += 1;
                         break;
                     }
-                    self.log.append(message::MessageType::ParticipantReady, String::from(txid), String::from(sid), opid);
-                    self.log_index += 1;
+                    
                     self.state = CoordinatorState::SentP1Commit;
                     
                     
@@ -578,6 +581,8 @@ impl Coordinator {
                         self.state = CoordinatorState::ReceivedVotesAbort;
                         self.request_status = RequestStatus::Aborted;
                         self.failed_ops += 1; 
+                        self.log.append(message::MessageType::CoordinatorAbort, String::from(txid), String::from(sid), opid);
+                        self.log_index += 1;
                         continue;
                     }
                     self.state = CoordinatorState::ReceivedP2VotesCommit;                    
@@ -613,8 +618,7 @@ impl Coordinator {
                         continue;
                     }
                     let mut msg = ProtocolMessage::instantiate(message::MessageType::CoordinatorAbort, uid, String::from(txid), String::from(sid), opid);                           
-                    self.log.append(message::MessageType::CoordinatorAbort, String::from(txid), String::from(sid), opid);
-                    self.log_index += 1;
+                    
                     self.send_participants(msg.clone());
                     msg.mtype = message::MessageType::ClientResultAbort;
                     let client_tx = &self.vec_client[client_index].2;
