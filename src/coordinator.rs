@@ -427,7 +427,7 @@ impl Coordinator {
         // TODO
         let num_client: u64 = self.vec_client.len()as u64;
         let num_participant: u64 = self.vec_participant.len() as u64;
-        let participant_timeout = Duration::from_millis(num_participant*2);
+        let participant_timeout = Duration::from_millis(num_participant*2+10);
         let client_timeout = Duration::from_millis(num_client*num_participant+200);
         let mut client_done = 0;
         let mut txid = "";
@@ -472,7 +472,7 @@ impl Coordinator {
                     let start_time = Instant::now();
                     'client_read: loop {
                         if Instant::now().duration_since(start_time) >= client_timeout{
-                            error!("Coordinator client timeout");
+                            //error!("Coordinator client timeout");
                             break 'outer;
                         }
                         let client_rx = &self.vec_client[client_index].3;
